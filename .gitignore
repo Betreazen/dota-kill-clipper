@@ -6,3 +6,5 @@ __pycache__/
 *.mkv
 .pytest_cache/
 graphify-out/
+# third-party Claude Code skills copied locally (licenses differ, not ours to publish)
+.claude/skills/

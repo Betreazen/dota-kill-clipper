@@ -35,6 +35,9 @@ OBS-плагин для Dota 2: во время записи автоматич�
 - Установленные скиллы Claude Code (2026-09-09): superpowers (14), caveman (22, без hooks — плагин-система не задействована),
   humanizer, karpathy-guidelines, tldraw, cybersecurity-skills (индекс). Уже были: ECC 2.2.1, seo, ponytail, spec-pilot, graphify, grill-me.
   В `~/.claude/skills/generated` осталась не-скилл папка из caveman (удаление заблокировано политикой) — безвредна.
+- В проекте стоят локальные скиллы `.claude/skills/` (116 шт., 2026-09-09): superpowers, caveman, seo, ponytail, ECC (44 из профиля minimal;
+  полный ECC — 286 скиллов, ставится по запросу из `My skill for claude code\ECC\skills`), humanizer, karpathy, tldraw, spec-pilot,
+  grill-me/grilling, graphify, cybersecurity-skills. Папка в `.gitignore` — чужие лицензии, в публичный репозиторий не попадает.
 - `claude` CLI не в PATH — установка плагинов через marketplace недоступна из сессии, скиллы скопированы папками.
 
 ## Журнал
