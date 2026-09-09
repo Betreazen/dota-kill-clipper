@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.venv/
+*.log
+*.mp4
+*.mkv
+.pytest_cache/
+graphify-out/
