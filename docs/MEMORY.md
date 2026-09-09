@@ -16,17 +16,19 @@ OBS-плагин для Dota 2: во время записи автоматич�
 | 2026-09-09 | Код детектора GSI брать за основу из `dota-helper-app/d2pt/events.py` и `gsi_config.py` | Проверено в бою, там же поиск пути Dota через реестр Steam |
 | 2026-09-09 | Cybersecurity-скиллы (818 шт.) установлены как один индексный скилл `cybersecurity-skills`, а не 818 папок | Иначе список скиллов в каждой сессии раздуется |
 
-## Открытые вопросы (ждут ответа пользователя)
-См. `SCENARIOS.md` §3. Ключевые: (1) скрипт внутри OBS + установка Python 3.12 vs внешняя программа через obs-websocket;
-(2) replay buffer vs пост-нарезка из записи; (3) точные тайминги серии/хвоста; (4) что считать убийством (только мои);
-(5) схема папок/имён; (6) `-c copy` vs перекодирование; (7) папка матча при старте или при первом убийстве; (8) GitHub.
+| 2026-09-09 | Скрипт внутри OBS на Python 3.12; буфер повтора вместо записи; kills + assists; хвост 10 с (одиночное) / 15 с (серия); окно серии 15 с; ffmpeg `-c copy`; папка матча при входе; корень `C:\Highlights`; публичный GitHub | Ответы пользователя на интервью, см. `SCENARIOS.md` §3 и `PROJECT.md` §2 |
+
+## Открытые вопросы
+- Ждём явное «да» на финальную спеку `PROJECT.md` — до него код не пишем.
+- Проверить на практике, что OBS 32.2.2 грузит Python 3.12 из `%LOCALAPPDATA%\Python\pythoncore-3.12-64` (первый шаг фазы 2).
 
 ## Факты об окружении (проверены 2026-09-09)
 - OBS 32.2.2; obs-websocket 5.7.4 встроен, сервер выключен, порт 4455, auth required.
 - Профиль «Безымянный»: Advanced, `RecFilePath=D:/Material/Obs записи`, `RecFormat2=mp4`, NVENC h264 tex, 2560×1440,
   `RecSplitFileType=Time`, `RecSplitFileTime=15`, replay buffer выкл (`RecRBTime=20`, `RecRBSize=512`), `FilenameFormatting=%CCYY-%MM-%DD %hh-%mm-%ss`.
 - OBS-скриптинг: `data/obs-scripting/64bit/_obspython.pyd` линкуется с `python3.dll` (stable ABI); в документации 32.2.2 заявлено 3.6–3.12;
-  на машине только Python 3.14 (`C:\Users\ampro\AppData\Local\Python\pythoncore-3.14-64`). Настройка пути Python в OBS не задана.
+  Python ставится через Python install manager (`py install <ver>` → `%LOCALAPPDATA%\Python\pythoncore-<ver>-64`, `python` = 3.14 по умолчанию).
+  Для OBS поставлен 3.12 рядом (2026-09-09), PATH и дефолт не тронуты. Путь для OBS → Scripts → Python Settings: `%LOCALAPPDATA%\Python\pythoncore-3.12-64`.
 - ffmpeg `C:\ffmpeg\bin\ffmpeg.exe` в PATH. Git, gh (Betreazen, логин есть).
 - Dota 2: `C:\Program Files (x86)\Steam\steamapps\common\dota 2 beta`; GSI-конфиги: helper (3210, throttle 0.5, только provider+map),
   d2pt (53000, throttle 0.1, player/hero/events и т.д., с токеном). Launch options уже `-console -condebug -conclearlog`.
@@ -37,3 +39,4 @@ OBS-плагин для Dota 2: во время записи автоматич�
 
 ## Журнал
 - 2026-09-09 23:13 — постановка задачи (8 пунктов). Разведка, установка скиллов, создание репо и документов, сценарии, вопросы пользователю.
+- 2026-09-09 23:34 — ответы на 10 вопросов получены. Спека финализирована, Python 3.12 установлен, репозиторий опубликован. Ждём «да».
