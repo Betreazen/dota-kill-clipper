@@ -20,6 +20,7 @@ TIMEZONE = "Europe/Minsk"
 RENDER_ATTEMPTS, RENDER_RETRY = 3, 60
 UPLOAD_ATTEMPTS, UPLOAD_RETRY, UPLOAD_RETRY_MAX = 10, 300, 3600
 REVIEW_RETRY = 3600
+REPORT_KEEP_DAYS = 36 * 30
 IDLE_WAIT = 5.0
 KEEP_DONE = 100
 QUOTA_REASONS = ("quotaExceeded", "uploadLimitExceeded", "dailyLimitExceeded", "rateLimitExceeded")
@@ -231,6 +232,11 @@ class Pipeline:
         report.update(month=month, created=datetime.fromtimestamp(now).isoformat(timespec="seconds"),
                       hidden_as="unlisted")
         self._save(f"reports/review-{month}.json", report)
+        # YouTube API data storage terms: statistics kept at most 36 months
+        oldest = f"review-{(datetime.fromtimestamp(now) - timedelta(days=REPORT_KEEP_DAYS)).strftime('%Y-%m')}.json"
+        for old in (self.state_dir / "reports").glob("review-*.json"):
+            if old.name < oldest:
+                old.unlink(missing_ok=True)
         self.state["last_review"] = month
         self._save("state.json", self.state)
         self.log.info("YouTube monthly review %s: %d videos, median %s, %d set to unlisted",

@@ -5,9 +5,10 @@ ID канала из токена с ID этого handle; токен друго
 
 ## 1. Проект Google (один раз)
 1. [console.cloud.google.com](https://console.cloud.google.com) → создать проект → APIs & Services → Library → включить **YouTube Data API v3**.
-2. OAuth consent screen: тип External, добавить свой Google-аккаунт. Затем **Publish app → In production**:
-   в статусе Testing Google выдаёт refresh token только на 7 дней, и вход придётся повторять каждую неделю.
-   Предупреждение «приложение не проверено» при входе для личного использования можно пропустить (Advanced → Go to …).
+2. Google Auth Platform → Branding и Audience: заполнить поля по листу [YOUTUBE_AUDIT.md](YOUTUBE_AUDIT.md), затем **Publish app** (статус In production).
+   В статусе Testing Google выдаёт refresh token только на 7 дней. После публикации один раз заново нажать «Log in to YouTube».
+   Экран «Google hasn't verified this app» для личного использования пропускается: Advanced → Go to Dota Kill Clipper.
+   Сайт и политика конфиденциальности проекта: https://betreazen.github.io/dota-kill-clipper/ (GitHub Pages из папки `docs`).
 3. Credentials → Create credentials → OAuth client ID → тип **Desktop app** → скачать JSON.
    Хранить вне репозитория (например `C:\Highlights\json-login\`). Путь указать в панели скрипта: «Google OAuth client JSON».
 4. Библиотеки для Python OBS:
@@ -16,7 +17,7 @@ ID канала из токена с ID этого handle; токен друго
 ## 2. Аудит (обязательно для публикации)
 Google ограничивает непроверенные проекты: **все видео, загруженные через `videos.insert` из проекта без аудита, остаются приватными**,
 и запланированная публикация их не откроет. Нужно подать форму *YouTube API Services — Audit and Quota Extension Form*
-(support.google.com/youtube/contact/yt_api_form), описать использование: загрузка собственных клипов на свой канал по расписанию.
+(support.google.com/youtube/contact/yt_api_form). Готовые ответы и файлы для загрузки — в [YOUTUBE_AUDIT.md](YOUTUBE_AUDIT.md).
 До прохождения аудита скрипт работает полностью, но видео придётся открывать вручную в YouTube Studio.
 
 ## 3. Вход
