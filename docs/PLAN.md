@@ -49,5 +49,8 @@
 - [x] `pipeline.py`: один рабочий поток, очередь `jobs.json`, повторы, ежемесячный срез с отчётом
 - [x] `tools/fetch_music.py`: подборка треков Kevin MacLeod + `credits.json`
 - [x] Панель OBS: вертикальный монтаж, CTA, музыка, JSON клиента Google, кнопка «Log in to YouTube», статус очереди
-- [ ] Вход в YouTube кнопкой в OBS и первая реальная загрузка — **делает пользователь**
+- [x] Вход в YouTube кнопкой в OBS (2026-09-13 17:00, канал подтверждён, первый срез: 1 видео)
+- [x] Сайт, политика конфиденциальности и условия на GitHub Pages (`docs/index.html`, `privacy.html`, `terms.html`), лист ответов `docs/YOUTUBE_AUDIT.md`, файлы для формы в `C:\Highlights\youtube-audit`
+- [ ] Branding + Publish app в Google Auth Platform и повторный вход — **делает пользователь**
+- [ ] Первая реальная загрузка Short — после следующей игры на Techies
 - [ ] Аудит проекта Google для YouTube Data API (без него видео остаются приватными) — **делает пользователь**
