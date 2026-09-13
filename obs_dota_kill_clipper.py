@@ -13,6 +13,9 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# OBS "Reload" re-runs only this file; drop cached package modules so edited code is actually loaded
+for _name in [m for m in sys.modules if m == "killclipper" or m.startswith("killclipper.")]:
+    del sys.modules[_name]
 
 import obspython as obs  # noqa: E402
 

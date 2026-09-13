@@ -74,6 +74,17 @@ def script(tmp_path, monkeypatch):
         mod.log.removeHandler(h)
 
 
+def test_reloading_the_script_in_obs_picks_up_new_package_code(monkeypatch):
+    stale = types.ModuleType("killclipper.pipeline")  # what OBS keeps in memory after an older load
+    stale.Pipeline = type("Pipeline", (), {})
+    monkeypatch.setitem(sys.modules, "killclipper.pipeline", stale)
+    monkeypatch.setitem(sys.modules, "obspython", make_obs_stub())
+    sys.modules.pop("obs_dota_kill_clipper", None)
+    mod = importlib.import_module("obs_dota_kill_clipper")
+    assert hasattr(mod.Pipeline, "request_logout")
+    sys.modules.pop("obs_dota_kill_clipper", None)
+
+
 def test_load_sets_up_timer_callbacks_server_and_buffer_config(script, tmp_path):
     mod, obs, settings = script
     assert obs.timers and obs.timers[0][1] == 100 and obs.callbacks == [mod.on_frontend_event]
