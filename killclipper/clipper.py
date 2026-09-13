@@ -8,6 +8,8 @@ finished clip is handed to on_clip (the Shorts/YouTube pipeline).
 """
 import queue
 import json
+import os
+import time
 import hashlib
 from dataclasses import asdict
 import threading
@@ -24,6 +26,7 @@ from .publishing import write_atomic
 
 SAVE_TIMEOUT = 30.0     # seconds to wait for OBS to report the saved replay file
 BUFFER_RETRY = 5.0      # seconds between replay-buffer start attempts while it is inactive
+JOURNAL_KEEP = 7 * 86400  # finished capture records are kept a week, then removed
 STALE_AFTER = 60.0      # drop a pending series once its end is this far in the past (buffer gone)
 
 
@@ -54,6 +57,12 @@ class Clipper:
                 record = json.loads(path.read_text(encoding='utf-8'))
                 if record['stage'] in ('cutting', 'ready'):
                     self._spawn(lambda p=path: self._recover_cut(p))
+                elif record['stage'] in ('done', 'lost') and time.time() - path.stat().st_mtime > JOURNAL_KEEP:
+                    for old in (path, path.with_suffix('.lock')):
+                        try:
+                            old.unlink(missing_ok=True)
+                        except OSError:
+                            pass
 
     def checkpoint(self):
         """Persist OBS requests whose replay path has not arrived yet."""
@@ -65,8 +74,8 @@ class Clipper:
         for series, folder, log in jobs:
             key = hashlib.sha256(f'{folder}:{series.first}'.encode()).hexdigest()
             path = self.journal / f'awaiting-{key}.json'
-            write_atomic(path, json.dumps({'stage': 'awaiting_replay', 'series': asdict(series),
-                'folder': str(folder), 'match_json': str(log.path) if log else None,
+            write_atomic(path, json.dumps({'stage': 'awaiting_replay', 'series': asdict(series), 'pid': os.getpid(),
+                'folder': str(folder) if folder else None, 'match_json': str(log.path) if log else None,
                 'requested_at': self.saving[1] if self.saving and self.saving[0][0] is series else None}))
         if jobs:
             self.log.warning('%d capture(s) awaiting an OBS replay file; see captures/awaiting-*.json', len(jobs))
@@ -90,6 +99,34 @@ class Clipper:
             match = MatchLog(Path(record['match_json'])) if record['match_json'] else None
             self._start_cut((Series(**record['series']), Path(record['folder']), match), src, saved_at)
 
+    def resume_awaiting(self, now: float, buffer_seconds: float = 120.0) -> None:
+        """After a script reload: re-request replays still in the running buffer, report the rest as lost.
+
+        Call after recover_replay(). The same OBS process (pid) and an active buffer that still covers the
+        series guarantee a fresh save holds the same footage; otherwise the frames are gone for good.
+        """
+        if not self.journal:
+            return
+        for path in self.journal.glob('awaiting-*.json'):
+            record = json.loads(path.read_text(encoding='utf-8'))
+            series = Series(**record['series'])
+            still_buffered = (record.get('pid') == os.getpid() and self.buffer.active()
+                              and now - series.start_ts <= buffer_seconds - 5)
+            if still_buffered:
+                folder = Path(record['folder']) if record.get('folder') not in (None, 'None') else None
+                match = MatchLog(Path(record['match_json'])) if record.get('match_json') else None
+                self.pending.append((series, folder, match))
+                path.unlink(missing_ok=True)
+                self.log.warning('Replay requested again after reload for clock %d..%d', series.start_clock, series.end_clock)
+            else:
+                lost = path.with_name(path.name.replace('awaiting-', 'lost-', 1))
+                write_atomic(lost, json.dumps({**record, 'stage': 'lost', 'lost_at': now}))
+                path.unlink(missing_ok=True)
+                self.log.error('Clip lost: OBS stopped before saving the replay for clock %d..%d (details: %s)',
+                               series.start_clock, series.end_clock, lost.name)
+        if self.pending:
+            self.checkpoint()
+
     def _recover_cut(self, path, match=None):
         with FileLock(path.with_suffix('.lock')):
             record = json.loads(path.read_text(encoding='utf-8'))
@@ -112,6 +149,11 @@ class Clipper:
                 self.on_clip(res['path'], series.kills, series.assists, series.kda, match, record['idx'])
             record['stage'] = 'done' if res['ok'] else 'failed'
             write_atomic(path, json.dumps(record))
+            if res['ok']:  # cut and handed off: the OBS replay (hundreds of MB) is no longer needed
+                try:
+                    Path(record['src']).unlink(missing_ok=True)
+                except OSError as e:
+                    self.log.warning('Replay %s not removed: %s', record['src'], e)
             self._results.put((match, record['idx'], series, {**res, 'handed_off': True}))
 
     # ---- inputs -------------------------------------------------------------------

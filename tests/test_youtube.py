@@ -111,6 +111,16 @@ def test_review_counts_only_public_videos_older_than_30_days():
     assert counts == {"old": 5}
 
 
+def test_find_upload_matches_title_and_scheduled_time():
+    mine = video("mine", 0, 1, "private")
+    mine["snippet"]["title"], mine["status"]["publishAt"] = "Hook | Dota 2", "2026-09-14T05:00:00Z"
+    other = video("other", 0, 1, "private")
+    other["snippet"]["title"], other["status"]["publishAt"] = "Hook | Dota 2", "2026-09-14T07:00:00Z"
+    c = client(FakeService(videos=[other, mine]))
+    assert c.find_upload("Hook | Dota 2", "2026-09-14T08:00:00+03:00") == "mine"
+    assert c.find_upload("Another title", "2026-09-14T08:00:00+03:00") is None
+
+
 def test_unlist_changes_privacy_and_never_deletes():
     service = FakeService(videos=[video("weak", 1, 40)])
     client(service).unlist(["weak"])

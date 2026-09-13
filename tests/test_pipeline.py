@@ -4,16 +4,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from killclipper.naming import MatchLog
-from killclipper.pipeline import Pipeline, next_quota_reset
+from killclipper.pipeline import CHANNEL_LIMIT_PROBE, RECONCILE_CHECKS, RECONCILE_DELAY, Pipeline, next_quota_reset
 
 NOW = datetime(2026, 9, 13, 9, 0).timestamp()
 
 
 class FakeYoutube:
-    def __init__(self, fail_insert=0, fail_playlists=0, logged_in=True, quota=False):
+    def __init__(self, fail_insert=0, fail_playlists=0, logged_in=True, quota=False, limit=False, reject=None,
+                 lose_response=False):
         self.inserted, self.playlisted, self.unlisted = [], [], []
         self.fail_insert, self.fail_playlists, self.logged_in, self.quota, self.logins = \
             fail_insert, fail_playlists, logged_in, quota, 0
+        self.limit, self.reject, self.lose_response = limit, reject, lose_response
+        self.insert_calls = self.find_calls = 0
+        self.playlist_quota = False
         self.counts = {f"v{i}": 50 for i in range(8)} | {"weak": 1}
 
     def authorized(self):
@@ -34,15 +38,33 @@ class FakeYoutube:
         self.logged_in = False
 
     def insert(self, path, meta, publish_at):
+        self.insert_calls += 1
         if self.quota:
             raise RuntimeError('HttpError 403: "reason": "quotaExceeded"')
+        if self.limit:
+            raise RuntimeError('ResumableUploadError: "reason": "uploadLimitExceeded"')
+        if self.reject:
+            reason, self.reject = self.reject, None
+            raise RuntimeError(f'HttpError 400: "reason": "{reason}"')
         if self.fail_insert:
             self.fail_insert -= 1
             raise RuntimeError("connection reset")
         self.inserted.append((path, meta, publish_at))
+        if self.lose_response:  # YouTube accepted the video, the answer never arrived
+            self.lose_response = False
+            raise OSError("response lost after success")
         return f"vid{len(self.inserted)}"
 
+    def find_upload(self, title, publish_at):
+        self.find_calls += 1
+        for n, (_, meta, slot) in enumerate(self.inserted, 1):
+            if meta["title"] == title and slot.isoformat() == publish_at:
+                return f"vid{n}"
+        return None
+
     def add_to_playlists(self, video_id, kills):
+        if self.playlist_quota:
+            raise RuntimeError('HttpError 403: "reason": "quotaExceeded"')
         if self.fail_playlists:
             self.fail_playlists -= 1
             raise RuntimeError("backend error")
@@ -175,46 +197,206 @@ def test_logout_stops_uploads_until_next_login(tmp_path):
     assert yt.inserted and p.jobs[0]["stage"] == "done"
 
 
-def test_unknown_upload_retains_slot_and_does_not_retry(tmp_path):
-    yt = FakeYoutube(fail_insert=1)
+def submit_clips(p, tmp_path, count):
+    match = tmp_path / "match"
+    match.mkdir(exist_ok=True)
+    log = MatchLog(match / "match.json")
+    jobs = []
+    for n in range(count):
+        clip = match / f"clip{n}.mp4"
+        clip.write_bytes(b"horizontal")
+        jobs.append(p.submit(str(clip), 1, 0, (1, 0, 0), log, log.add_clip({"path": str(clip)})))
+    return jobs
+
+
+def slots_file(tmp_path):
+    return json.loads((tmp_path / "state" / "schedule.json").read_text())
+
+
+def test_unknown_upload_is_checked_on_the_channel_then_uploaded_again_if_missing(tmp_path):
+    yt = FakeYoutube(fail_insert=1)  # the connection dropped before YouTube got the video
     p, _ = make(tmp_path, yt)
     clip, log, idx = clip_with_log(tmp_path)
     p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
     run_all(p)
     job = p.jobs[0]
     assert job["stage"] == "upload_unknown" and "connection reset" in job["error"]
-    assert len(json.loads((tmp_path / "state" / "schedule.json").read_text())) == 1
-    run_all(p, now=job["next_try"])
-    assert job["stage"] == "upload_unknown" and not yt.inserted
+    assert len(slots_file(tmp_path)) == 1  # slot kept while the outcome is unknown
+    now = NOW
+    for _ in range(RECONCILE_CHECKS):
+        now += RECONCILE_DELAY
+        run_all(p, now)
+    assert yt.find_calls == RECONCILE_CHECKS and job["stage"] == "done" and len(yt.inserted) == 1
+    assert slots_file(tmp_path) == [job["publish_at"]]  # the first slot was released, no leak
 
 
-def test_lost_success_response_does_not_create_duplicate_after_restart(tmp_path):
-    class LostResponse(FakeYoutube):
-        def insert(self, *args):
-            super().insert(*args)
-            raise OSError('response lost after success')
-    yt = LostResponse()
+def test_lost_upload_response_is_found_on_the_channel_without_a_duplicate(tmp_path):
+    yt = FakeYoutube(lose_response=True)
     p, _ = make(tmp_path, yt, vertical=False)
     clip, log, idx = clip_with_log(tmp_path)
     p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
     run_all(p)
-    restarted, _ = make(tmp_path, yt, vertical=False)
-    run_all(restarted, NOW + 3600)
-    assert len(yt.inserted) == 1
-    assert restarted.jobs[0]['stage'] == 'upload_unknown'
+    assert p.jobs[0]["stage"] == "upload_unknown"
+    restarted, _ = make(tmp_path, yt, vertical=False)  # OBS restarted meanwhile
+    run_all(restarted, NOW + RECONCILE_DELAY)
+    job = restarted.jobs[0]
+    assert len(yt.inserted) == 1 and job["stage"] == "done" and job["video_id"] == "vid1"
+    assert yt.playlisted == [("vid1", 1)]
 
 
-def test_interrupted_upload_is_quarantined(tmp_path):
-    p, _ = make(tmp_path, FakeYoutube(), vertical=False)
+def test_upload_interrupted_by_a_crash_is_checked_before_any_new_upload(tmp_path):
+    yt = FakeYoutube()
+    p, _ = make(tmp_path, yt, vertical=False)
     clip, log, idx = clip_with_log(tmp_path)
     job = p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
-    job['stage'] = 'uploading'
+    slot = datetime(2026, 9, 13, 10, 0, tzinfo=p.schedule.zone)
+    yt.inserted.append((str(clip), job["meta"], slot))  # YouTube got it, OBS died before saving the id
+    job.update(stage="uploading", publish_at=slot.isoformat())
     with p._lock:
         p._save_jobs()
-    restarted, _ = make(tmp_path, FakeYoutube(), vertical=False)
+    restarted, _ = make(tmp_path, yt, vertical=False)
     run_all(restarted)
-    assert restarted.jobs[0]['stage'] == 'upload_unknown'
-    assert not restarted.youtube.inserted
+    assert restarted.jobs[0]["stage"] == "done" and restarted.jobs[0]["video_id"] == "vid1"
+    assert yt.insert_calls == 0
+
+
+def test_api_quota_pauses_the_whole_queue_until_the_daily_reset(tmp_path):
+    yt = FakeYoutube(quota=True)
+    p, _ = make(tmp_path, yt, vertical=False)
+    submit_clips(p, tmp_path, 3)
+    run_all(p)
+    assert yt.insert_calls == 1 and all(j["stage"] == "upload" and j["attempts"] == 0 for j in p.jobs)
+    assert p.state["uploads_paused_until"] == next_quota_reset(NOW) and slots_file(tmp_path) == []
+    yt.quota = False
+    run_all(p, next_quota_reset(NOW) - 60)
+    assert yt.insert_calls == 1
+    run_all(p, next_quota_reset(NOW))
+    assert [j["stage"] for j in p.jobs] == ["done"] * 3
+    assert len({slot.isoformat() for _, _, slot in yt.inserted}) == 3
+
+
+def test_channel_upload_limit_is_probed_hourly_with_a_single_video(tmp_path):
+    yt = FakeYoutube(limit=True)
+    p, _ = make(tmp_path, yt, vertical=False)
+    submit_clips(p, tmp_path, 3)
+    run_all(p)
+    assert yt.insert_calls == 1 and p.state["uploads_paused_until"] == NOW + CHANNEL_LIMIT_PROBE
+    assert "channel upload limit" in p.status()
+    run_all(p, NOW + CHANNEL_LIMIT_PROBE)  # still limited: exactly one more probe
+    assert yt.insert_calls == 2
+    yt.limit = False
+    run_all(p, NOW + 2 * CHANNEL_LIMIT_PROBE)
+    assert [j["stage"] for j in p.jobs] == ["done"] * 3 and len(yt.inserted) == 3
+    assert "paused" not in p.status()
+
+
+def test_upload_pause_survives_an_obs_restart(tmp_path):
+    yt = FakeYoutube(limit=True)
+    p, _ = make(tmp_path, yt, vertical=False)
+    submit_clips(p, tmp_path, 2)
+    run_all(p)
+    restarted, _ = make(tmp_path, yt, vertical=False)
+    run_all(restarted, NOW + 60)
+    assert yt.insert_calls == 1 and restarted.state["uploads_paused_until"] == NOW + CHANNEL_LIMIT_PROBE
+
+
+def test_jobs_parked_by_the_old_quota_rule_are_released_on_start(tmp_path):
+    yt = FakeYoutube()
+    p, _ = make(tmp_path, yt, vertical=False)
+    clip, log, idx = clip_with_log(tmp_path)
+    job = p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
+    job.update(error='ResumableUploadError: "reason": "uploadLimitExceeded"', next_try=NOW + 86400)
+    with p._lock:
+        p._save_jobs()
+    restarted, _ = make(tmp_path, yt, vertical=False)
+    run_all(restarted)
+    assert restarted.jobs[0]["stage"] == "done"
+
+
+def test_playlist_quota_keeps_the_video_and_finishes_after_the_reset(tmp_path):
+    yt = FakeYoutube()
+    yt.playlist_quota = True
+    p, _ = make(tmp_path, yt, vertical=False)
+    clip, log, idx = clip_with_log(tmp_path)
+    p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
+    run_all(p)
+    job = p.jobs[0]
+    assert job["video_id"] == "vid1" and job["stage"] == "upload"
+    assert p.state["uploads_paused_until"] == next_quota_reset(NOW)
+    yt.playlist_quota = False
+    run_all(p, next_quota_reset(NOW))
+    assert job["stage"] == "done" and len(yt.inserted) == 1 and yt.playlisted == [("vid1", 1)]
+
+
+def test_rejected_video_fails_alone_and_frees_its_slot(tmp_path):
+    yt = FakeYoutube(reject="invalidTitle")
+    p, _ = make(tmp_path, yt, vertical=False)
+    submit_clips(p, tmp_path, 2)
+    run_all(p)
+    assert p.jobs[0]["stage"] == "failed" and "invalidTitle" in p.jobs[0]["error"]
+    assert p.jobs[1]["stage"] == "done" and slots_file(tmp_path) == [p.jobs[1]["publish_at"]]
+
+
+def test_transient_playlist_errors_never_fail_an_uploaded_video(tmp_path):
+    yt = FakeYoutube(fail_playlists=15)
+    p, _ = make(tmp_path, yt, vertical=False)
+    submit_clips(p, tmp_path, 1)
+    now = NOW
+    for _ in range(30):
+        run_all(p, now)
+        now += 3600
+    assert p.jobs[0]["stage"] == "done" and len(yt.inserted) == 1
+
+
+def test_orphan_slot_left_by_a_crash_is_released_but_owned_slots_stay(tmp_path):
+    yt = FakeYoutube()
+    p, _ = make(tmp_path, yt, vertical=False)
+    submit_clips(p, tmp_path, 1)
+    run_all(p)  # uploaded, publishes at 10:00
+    zone = p.schedule.zone
+    orphan = p.schedule.reserve(datetime(2026, 9, 13, 11, 0, tzinfo=zone))  # crash before the job was saved
+    assert len(slots_file(tmp_path)) == 2
+    p._release_orphan_slots(NOW)
+    assert slots_file(tmp_path) == [p.jobs[0]["publish_at"]] and orphan.isoformat() not in slots_file(tmp_path)
+
+
+def test_done_jobs_publishing_in_the_future_are_never_pruned(tmp_path, monkeypatch):
+    import killclipper.pipeline as pipeline
+    monkeypatch.setattr(pipeline, "KEEP_DONE", 1)
+    yt = FakeYoutube()
+    p, _ = make(tmp_path, yt, vertical=False)
+    submit_clips(p, tmp_path, 2)
+    run_all(p)
+    assert [j["stage"] for j in p.jobs] == ["done", "done"]  # both still own future slots
+
+
+def test_channel_lookup_errors_back_off_without_reuploading(tmp_path, caplog):
+    yt = FakeYoutube(lose_response=True)
+    p, _ = make(tmp_path, yt, vertical=False)
+    submit_clips(p, tmp_path, 1)
+    run_all(p)
+    yt.find_upload = lambda title, publish_at: (_ for _ in ()).throw(RuntimeError("backend unavailable"))
+    now, delays = NOW, []
+    with caplog.at_level(logging.ERROR, logger="test"):
+        for _ in range(8):
+            now = max(now, p.jobs[0]["next_try"])
+            run_all(p, now)
+            delays.append(p.jobs[0]["next_try"] - now)
+    job = p.jobs[0]
+    assert job["stage"] == "upload_unknown" and job.get("checks", 0) == 0 and len(yt.inserted) == 1
+    assert delays == sorted(delays) and max(delays) <= 3600 and "still cannot check" in caplog.text
+
+
+def test_missing_short_is_rendered_again_before_upload(tmp_path):
+    yt = FakeYoutube()
+    p, calls = make(tmp_path, yt, youtube_enabled=False)
+    clip, log, idx = clip_with_log(tmp_path)
+    p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
+    run_all(p)
+    Path(p.jobs[0]["short"]).unlink()
+    p.cfg["youtube_enabled"] = True
+    run_all(p)
+    assert len(calls) == 2 and p.jobs[0]["stage"] == "done" and len(yt.inserted) == 1
 
 
 def test_reload_waits_for_old_worker_and_renders_only_once(tmp_path):
@@ -247,16 +429,9 @@ def test_reload_waits_for_old_worker_and_renders_only_once(tmp_path):
     assert restarted.jobs[0]['stage'] == 'upload'
 
 
-def test_quota_error_waits_for_daily_reset_without_using_attempts(tmp_path):
-    yt = FakeYoutube(quota=True)
-    p, _ = make(tmp_path, yt)
-    clip, log, idx = clip_with_log(tmp_path)
-    p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
-    run_all(p)
-    job = p.jobs[0]
-    assert job["stage"] == "upload" and job["attempts"] == 0 and job["next_try"] == next_quota_reset(NOW)
-    reset = datetime.fromtimestamp(job["next_try"], timezone.utc)
-    assert (reset.hour, reset.minute) == (8, 5) and job["next_try"] > NOW
+def test_daily_quota_reset_is_after_midnight_pacific():
+    reset = datetime.fromtimestamp(next_quota_reset(NOW), timezone.utc)
+    assert (reset.hour, reset.minute) == (8, 5) and next_quota_reset(NOW) > NOW
 
 
 def test_playlist_failure_after_insert_never_uploads_the_video_twice(tmp_path):

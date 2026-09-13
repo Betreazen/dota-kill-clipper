@@ -20,12 +20,37 @@ from .render import choose_music, music_credit, render_vertical
 
 TIMEZONE = "Europe/Minsk"
 RENDER_ATTEMPTS, RENDER_RETRY = 3, 60
-UPLOAD_ATTEMPTS, UPLOAD_RETRY, UPLOAD_RETRY_MAX = 10, 300, 3600
+UPLOAD_RETRY, UPLOAD_RETRY_MAX = 300, 3600    # transient upload errors: retried forever with this backoff
+RECONCILE_DELAY, RECONCILE_CHECKS = 600, 3    # unknown upload result: look for the video on the channel first
+RECONCILE_ERROR_ALERT = 3                     # lookups failing this many times in a row are logged as errors
+CHANNEL_LIMIT_PROBE = 3600                    # channel upload limit is a rolling 24 h window: probe hourly
+RATE_LIMIT_PAUSE, AUTH_PAUSE, SLOT_RETRY = 900, 600, 300
 REVIEW_RETRY = 3600
 REPORT_KEEP_DAYS = 36 * 30
 IDLE_WAIT = 5.0
 KEEP_DONE = 100
-QUOTA_REASONS = ("quotaExceeded", "uploadLimitExceeded", "dailyLimitExceeded", "rateLimitExceeded")
+# YouTube answers that pause the whole upload queue (renders keep going)
+PAUSE_REASONS = {"quotaExceeded": "quota", "dailyLimitExceeded": "quota", "uploadLimitExceeded": "channel_limit",
+                 "rateLimitExceeded": "rate", "userRateLimitExceeded": "rate", "NotLoggedIn": "auth",
+                 "invalid_grant": "auth", "RefreshError": "auth", "HttpError 401": "auth"}
+PAUSE_TEXT = {"quota": "YouTube API daily quota", "channel_limit": "channel upload limit",
+              "rate": "YouTube rate limit", "auth": "YouTube login needed"}
+# answers that mean YouTube refused this particular video; retrying the same request cannot help
+REJECTED_REASONS = ("invalidTitle", "invalidDescription", "invalidTags", "invalidCategoryId", "invalidFilename",
+                    "invalidVideoMetadata", "defaultLanguageNotSet", "mediaBodyRequired", "forbiddenLicenseSetting",
+                    "forbiddenPrivacySetting", "invalidRecordingDetails")
+
+
+def classify(error: str) -> str | None:
+    """quota / channel_limit / rate / auth pause the queue, rejected / slot concern one video, None = unknown."""
+    for reason, kind in PAUSE_REASONS.items():
+        if reason in error:
+            return kind
+    if any(reason in error for reason in REJECTED_REASONS):
+        return "rejected"
+    if "invalidPublishAt" in error:
+        return "slot"
+    return None
 
 
 def next_quota_reset(now: float) -> float:
@@ -53,9 +78,13 @@ class Pipeline:
         self._recover_uploads()
 
     def _recover_uploads(self):
+        """Interrupted uploads are looked up on the channel; jobs parked by the old per-job quota rule are released."""
         for job in self.jobs:
             if job['stage'] == 'uploading':
-                job.update(stage='upload_unknown', error='Upload interrupted; verify on YouTube before retrying')
+                job.update(stage='upload_unknown', next_try=0, checks=0,
+                           error='Upload interrupted; checking the channel before uploading again')
+            elif job['stage'] == 'upload' and job.get('error') and classify(job['error']) in PAUSE_TEXT:
+                job['next_try'] = 0
 
     # ---- OBS main thread ------------------------------------------------------------
     def submit(self, clip: str, kills: int, assists: int, kda, match_log: MatchLog | None = None,
@@ -95,9 +124,11 @@ class Pipeline:
         with self._lock:
             stages = Counter(j["stage"] for j in self.jobs)
         youtube = self.youtube_state if self.youtube and self.cfg.get("youtube_enabled") else "off"
-        return (f"Shorts: render {stages['render']}, upload {stages['upload']}, failed {stages['failed']}, "
-                f"unknown {stages['upload_unknown']} | "
-                f"YouTube: {youtube}")
+        paused = self.state.get("uploads_paused_until", 0)
+        pause = (f" | uploads paused until {datetime.fromtimestamp(paused):%d.%m %H:%M}: "
+                 f"{self.state.get('uploads_pause_reason')}" if paused > self._clock() else "")
+        return (f"Shorts: render {stages['render']}, upload {stages['upload']}, "
+                f"checking {stages['upload_unknown']}, failed {stages['failed']} | YouTube: {youtube}{pause}")
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -119,6 +150,7 @@ class Pipeline:
                 self.jobs = self._load('jobs.json', [])
                 self.state = self._load('state.json', {})
                 self._recover_uploads()
+                self._release_orphan_slots(self._clock())
             self._run()
         finally:
             ownership.release()
@@ -168,6 +200,8 @@ class Pipeline:
             return False
         if job["stage"] == "render":
             self._do_render(job, now)
+        elif job["stage"] == "upload_unknown":
+            self._do_reconcile(job, now)
         else:
             self._do_upload(job, now)
         with self._lock:
@@ -202,12 +236,13 @@ class Pipeline:
         with self._lock:
             jobs = list(self.jobs)
         ready = None
+        uploads_open = now >= self.state.get("uploads_paused_until", 0)
         for job in jobs:
             if job["next_try"] > now:
                 continue
             if job["stage"] == "render":
                 return job
-            if job["stage"] == "upload":
+            if job["stage"] in ("upload", "upload_unknown") and uploads_open:
                 if ready is None:
                     ready = self._youtube_ready()
                 if ready:
@@ -229,37 +264,128 @@ class Pipeline:
         self.log.info("Short rendered: %s", dst)
 
     def _do_upload(self, job: dict, now: float) -> None:
-        path = job["short"] or job["clip"]
-        try:
-            if not job["video_id"]:
-                slot = self.schedule.reserve(datetime.fromtimestamp(now, self.schedule.zone))
-                job.update(stage='uploading', publish_at=slot.isoformat())
-                with self._lock:
-                    self._save_jobs()
-                try:
-                    video_id = self.youtube.insert(path, job["meta"], slot)
-                except Exception as e:
-                    if any(reason in str(e) for reason in QUOTA_REASONS):
-                        self.schedule.release(slot)
-                        job.update(stage='upload', publish_at=None)
-                        raise
-                    job.update(stage='upload_unknown', error=f'{type(e).__name__}: {e}')
-                    self.log.error('Upload outcome unknown; slot retained, automatic re-upload disabled: %s', job['clip'])
+        """Upload into a reserved slot, then add to playlists. No outcome ever drops or duplicates the video."""
+        path = Path(job["short"] or job["clip"])
+        if not job["video_id"]:
+            if not path.exists():
+                self._file_missing(job, path)
+                return
+            slot = self.schedule.reserve(datetime.fromtimestamp(now, self.schedule.zone))
+            job.update(stage="uploading", publish_at=slot.isoformat())
+            with self._lock:
+                self._save_jobs()  # a crash from here on is looked up on the channel, never blindly re-uploaded
+            try:
+                video_id = self.youtube.insert(str(path), job["meta"], slot)
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+                kind = classify(error)
+                if kind is None:  # the video may or may not have reached YouTube
+                    job.update(stage="upload_unknown", error=error, checks=0, next_try=now + RECONCILE_DELAY)
+                    self.log.warning("Upload result unknown for %s; checking the channel in %d min before retrying: %s",
+                                     path.name, RECONCILE_DELAY // 60, error)
                     return
-                job.update(video_id=video_id, stage='upload', publish_at=slot.isoformat())
-                with self._lock:
-                    self._save_jobs()  # retries after this point only repair playlist membership
-                self._update_match(job, youtube_id=video_id, publish_at=slot.isoformat())
-                self.log.info("YouTube: %s uploaded as %s, publishes %s", Path(path).name, video_id, slot.isoformat())
+                self.schedule.release(slot)  # YouTube refused the request, so nothing was uploaded
+                job.update(stage="upload", publish_at=None, error=error)
+                if kind == "rejected":
+                    job["stage"] = "failed"
+                    self.log.error("YouTube rejected %s, it stays on disk and out of the queue: %s", path.name, error)
+                elif kind == "slot":
+                    job["next_try"] = now + SLOT_RETRY
+                else:
+                    self._pause(kind, now)
+                return
+            job.update(video_id=video_id, stage="upload", publish_at=slot.isoformat(), error=None)
+            with self._lock:
+                self._save_jobs()  # retries after this point only repair playlist membership
+            self._resume_uploads()
+            self._update_match(job, youtube_id=video_id, publish_at=slot.isoformat())
+            self.log.info("YouTube: %s uploaded as %s, publishes %s", path.name, video_id, slot.isoformat())
+        try:
             self.youtube.add_to_playlists(job["video_id"], job["kills"])
         except Exception as e:
-            if any(reason in str(e) for reason in QUOTA_REASONS):
-                job.update(next_try=next_quota_reset(now), error=f"{type(e).__name__}: {e}")
-                self.log.warning("YouTube quota exhausted, uploads resume after the daily reset")
-                return
-            self._retry_or_fail(job, now, e, "Upload", UPLOAD_ATTEMPTS, UPLOAD_RETRY, UPLOAD_RETRY_MAX)
+            error = f"{type(e).__name__}: {e}"
+            kind = classify(error)
+            job["error"] = error
+            if kind in PAUSE_TEXT:
+                self._pause(kind, now)
+            else:
+                self._retry_later(job, now, error)
             return
-        job.update(stage="done", attempts=0, error=None)
+        self._resume_uploads()
+        job.update(stage="done", attempts=0, error=None, next_try=0)
+
+    def _do_reconcile(self, job: dict, now: float) -> None:
+        """Unknown upload result: find the video on the channel before ever uploading it again."""
+        try:
+            found = self.youtube.find_upload(job["meta"]["title"], job["publish_at"]) if job["publish_at"] else None
+        except Exception as e:
+            error = f"{type(e).__name__}: {e}"
+            job["error"] = error
+            kind = classify(error)
+            if kind in PAUSE_TEXT:
+                self._pause(kind, now)
+                return
+            # never re-upload on a failed lookup: that could duplicate the video; back off and keep checking
+            job["reconcile_errors"] = job.get("reconcile_errors", 0) + 1
+            job["next_try"] = now + min(RECONCILE_DELAY * job["reconcile_errors"], UPLOAD_RETRY_MAX)
+            level = self.log.error if job["reconcile_errors"] >= RECONCILE_ERROR_ALERT else self.log.warning
+            level("YouTube: still cannot check the channel for %s (%d tries); it waits, neither lost nor re-uploaded: %s",
+                  Path(job["short"] or job["clip"]).name, job["reconcile_errors"], error)
+            return
+        job.pop("reconcile_errors", None)
+        if found:
+            job.update(stage="upload", video_id=found, checks=0, next_try=0, error=None)
+            self._update_match(job, youtube_id=found, publish_at=job["publish_at"])
+            self.log.info("YouTube: upload with unknown result found on the channel as %s, not uploading again", found)
+            return
+        job["checks"] = job.get("checks", 0) + 1
+        if job["checks"] < RECONCILE_CHECKS:
+            job["next_try"] = now + RECONCILE_DELAY
+            return
+        if job["publish_at"]:
+            self.schedule.release(datetime.fromisoformat(job["publish_at"]))
+        job.update(stage="upload", publish_at=None, checks=0, next_try=0,
+                   error="Not found on the channel after an unknown upload result; uploading again")
+        self.log.warning("YouTube: %s is not on the channel after %d checks, uploading it again",
+                         Path(job["short"] or job["clip"]).name, RECONCILE_CHECKS)
+
+    def _release_orphan_slots(self, now: float) -> None:
+        """A crash between reserving a slot and saving the job leaves a slot no video owns: free future ones."""
+        owned = {job["publish_at"] for job in self.jobs if job.get("publish_at")}
+        current = datetime.fromtimestamp(now, self.schedule.zone)
+        for slot in sorted(self.schedule._read()):
+            when = datetime.fromisoformat(slot)
+            if slot not in owned and when > current:
+                self.schedule.release(when)
+                self.log.warning("Released publication slot %s that no queued video owns", slot)
+
+    def _file_missing(self, job: dict, path: Path) -> None:
+        if job["short"] and Path(job["clip"]).exists():
+            job.update(stage="render", short=None, error=f"Short missing, rendering again: {path}")
+            self.log.warning("Short %s is missing, rendering it again", path.name)
+        else:
+            job.update(stage="failed", error=f"Clip file missing: {path}")
+            self.log.error("Cannot upload %s: the clip file is missing", path)
+
+    def _pause(self, kind: str, now: float) -> None:
+        until = {"quota": next_quota_reset(now), "channel_limit": now + CHANNEL_LIMIT_PROBE,
+                 "rate": now + RATE_LIMIT_PAUSE, "auth": now + AUTH_PAUSE}[kind]
+        self.state.update(uploads_paused_until=until, uploads_pause_reason=PAUSE_TEXT[kind])
+        self._save("state.json", self.state)
+        self.log.warning("YouTube uploads paused until %s (%s); queued videos wait, nothing is lost",
+                         datetime.fromtimestamp(until).strftime("%d.%m %H:%M"), PAUSE_TEXT[kind])
+
+    def _resume_uploads(self) -> None:
+        if self.state.pop("uploads_paused_until", None) is not None:
+            self.state.pop("uploads_pause_reason", None)
+            self._save("state.json", self.state)
+
+    def _retry_later(self, job: dict, now: float, error: str) -> None:
+        job["attempts"] += 1
+        job["error"] = error
+        job["next_try"] = now + min(UPLOAD_RETRY * job["attempts"], UPLOAD_RETRY_MAX)
+        self.log.warning("Upload step failed (attempt %d), retry in %d min: %s", job["attempts"],
+                         (job["next_try"] - now) // 60, error)
 
     def _retry_or_fail(self, job, now, error, what, attempts, delay, cap=None) -> None:
         job["attempts"] += 1
@@ -324,7 +450,10 @@ class Pipeline:
         write_atomic(self.state_dir / name, json.dumps(data, ensure_ascii=False, indent=1))
 
     def _save_jobs(self) -> None:  # caller holds self._lock
-        done = [j for j in self.jobs if j["stage"] == "done"]
-        stale = {id(j) for j in done[:-KEEP_DONE]}
+        now = datetime.fromtimestamp(self._clock(), self.schedule.zone)
+        # a done job still owns its future slot; pruning it would let another video take that slot
+        done = [j for j in self.jobs if j["stage"] == "done"
+                and (not j.get("publish_at") or datetime.fromisoformat(j["publish_at"]) <= now)]
+        stale = {id(j) for j in (done[:-KEEP_DONE] if KEEP_DONE else done)}
         self.jobs[:] = [j for j in self.jobs if id(j) not in stale]
         self._save("jobs.json", self.jobs)

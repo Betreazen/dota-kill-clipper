@@ -45,7 +45,7 @@ def test_capture_recovers_when_obs_closes_before_cut_worker_runs(tmp_path):
     # A late old worker sees the committed journal and cannot cut/submit again.
     deferred[0]()
     assert len(calls) == len(handed) == 1
-    assert raw.exists()
+    assert not raw.exists()  # the OBS replay is removed once the clip is cut and safely handed off
     log = json.loads(Path(handed[0][4].path).read_text(encoding='utf-8'))
     assert log['clips'][0]['status'] == 'ok'
 
@@ -74,6 +74,43 @@ def test_late_replay_is_recovered_from_request_journal(tmp_path):
     restarted.recover_replay(str(raw))
     restarted.recover_replay(str(raw))
     assert len(calls) == len(handed) == 1
+
+
+def closed_series_waiting_for_obs(tmp_path, handed, calls):
+    """A series whose replay save was requested, then the script was reloaded before OBS answered."""
+    c = capture(tmp_path, lambda f: f(), lambda *a: handed.append(a), cutter(calls))
+    c.on_packet(1000, packet(kills=0))
+    c.on_packet(1001, packet(kills=1))
+    c.tick(1016)
+    assert c.buffer.saves == 1 and list((tmp_path / 'state' / 'captures').glob('awaiting-*.json'))
+    return c
+
+
+def test_reload_re_requests_a_replay_that_is_still_in_the_running_buffer(tmp_path):
+    handed, calls = [], []
+    closed_series_waiting_for_obs(tmp_path, handed, calls)
+    reloaded = capture(tmp_path, lambda f: f(), lambda *a: handed.append(a), cutter(calls))
+    reloaded.recover_replay(None)            # OBS gave no replay path for the old request
+    reloaded.resume_awaiting(1030)
+    reloaded.tick(1030)
+    assert reloaded.buffer.saves == 1        # a fresh save of the same footage
+    raw = tmp_path / 'replay.mp4'
+    raw.write_bytes(b'raw')
+    reloaded.on_buffer_saved(str(raw), 1031)
+    assert len(calls) == len(handed) == 1
+    assert not list((tmp_path / 'state' / 'captures').glob('awaiting-*.json'))
+
+
+def test_series_whose_footage_left_the_buffer_is_reported_lost_not_kept_forever(tmp_path, caplog):
+    handed, calls = [], []
+    closed_series_waiting_for_obs(tmp_path, handed, calls)
+    restarted = capture(tmp_path, lambda f: f(), lambda *a: handed.append(a), cutter(calls))
+    restarted.buffer._active = False         # OBS was restarted: the replay buffer is empty
+    with caplog.at_level(logging.ERROR, logger='test'):
+        restarted.resume_awaiting(1030)
+    captures = tmp_path / 'state' / 'captures'
+    assert not restarted.pending and not list(captures.glob('awaiting-*.json'))
+    assert len(list(captures.glob('lost-*.json'))) == 1 and 'lost' in caplog.text.lower()
 
 
 def test_concurrent_reservations_are_unique(tmp_path):

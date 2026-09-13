@@ -16,8 +16,10 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -220,8 +222,14 @@ def _():
     stages = dict(Counter(j["stage"] for j in jobs))
     status = "WARN" if stages.get("failed") else "OK"
     reports = sorted(p.name for p in (DATA / "reports").glob("*.json")) if (DATA / "reports").exists() else []
-    return status, (f"jobs {stages or 'none'}; schedule slots {load('schedule.json', [])}; "
-                    f"last review {load('state.json', {}).get('last_review')}; reports {reports}")
+    state = load("state.json", {})
+    paused = state.get("uploads_paused_until", 0)
+    pause = "none"
+    if paused > time.time():
+        status = "WARN" if status == "OK" else status
+        pause = f"until {datetime.fromtimestamp(paused):%d.%m %H:%M} ({state.get('uploads_pause_reason')})"
+    return status, (f"jobs {stages or 'none'}; upload pause {pause}; schedule slots {len(load('schedule.json', []))}; "
+                    f"last review {state.get('last_review')}; reports {reports}")
 
 
 @check("YouTube channel, token and playlists")

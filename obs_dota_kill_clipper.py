@@ -315,6 +315,7 @@ def script_load(settings):
     pipeline.start()
     clipper = Clipper(current, ObsBuffer(), log, on_clip=pipeline.submit, state_dir=DATA_DIR)
     clipper.recover_replay(obs.obs_frontend_get_last_replay())
+    clipper.resume_awaiting(time.time())
     os.makedirs(current["root"], exist_ok=True)
     log.info("Loaded (python %s). Clips -> %s, ffmpeg: %s", sys.version.split()[0], current["root"], current["ffmpeg"])
     ensure_buffer_config()

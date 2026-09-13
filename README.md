@@ -71,6 +71,7 @@ C:\Highlights\2026-09-09 21-35 pudge (match 8954164528)\
 | `Replay buffer is not active` | Settings → Output → Recording → Replay Buffer включён; после смены настроек перезапусти OBS; скрипт пытается включить буфер сам каждые 5 с |
 | Клип `_raw.mp4` вместо нарезанного | ffmpeg/ffprobe не найдены или упали — путь в панели, подробности в логе |
 | Клип короче ожидаемого, в логе `TRUNCATED` | Бой длиннее буфера — увеличь длину буфера в OBS (по умолчанию скрипт ставит 120 с) |
+| В статусе `uploads paused until …: channel upload limit` или `API daily quota` | YouTube временно не принимает загрузки. Видео ждут в очереди и загрузятся сами: лимит канала проверяется раз в час, квота — после 11:05 по Минску |
 | В статусе `YouTube: not logged in` | Нажми «Log in to YouTube» и выбери канал Betreazen highlights Dota 2; токен другого канала отклоняется |
 | Видео на YouTube остаются приватными после даты публикации | Проект Google не прошёл аудит YouTube API — см. docs/YOUTUBE.md |
 | Short не появился, в логе `Render failed` | Путь к CTA или музыке, NVENC занят (скрипт сам пробует libx264); после 3 попыток задание помечается `failed` в `jobs.json` |

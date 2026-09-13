@@ -190,6 +190,23 @@ class YoutubeClient:
             request = self.service.playlists().list_next(request, page)
         return ids
 
+    def find_upload(self, title: str, publish_at: str, lookback: int = 50) -> str | None:
+        """Id of a recent upload with this title and scheduled time (checks an upload whose answer was lost)."""
+        target = datetime.fromisoformat(publish_at).astimezone(timezone.utc)
+        channel = self.service.channels().list(part="contentDetails", id=self.channel_id).execute()["items"][0]
+        uploads = channel["contentDetails"]["relatedPlaylists"]["uploads"]
+        items = self.service.playlistItems().list(part="contentDetails", playlistId=uploads,
+                                                  maxResults=lookback).execute().get("items", [])
+        ids = [item["contentDetails"]["videoId"] for item in items]
+        if not ids:
+            return None
+        for v in self.service.videos().list(part="snippet,status", id=",".join(ids)).execute().get("items", []):
+            when = v["status"].get("publishAt") or v["snippet"].get("publishedAt")
+            if v["snippet"].get("title") == title and when and \
+                    abs(datetime.fromisoformat(when.replace("Z", "+00:00")) - target) <= timedelta(minutes=5):
+                return v["id"]
+        return None
+
     def review_counts(self, now: datetime | None = None) -> dict[str, int]:
         """View counts of public videos published at least 30 days ago."""
         now = now or datetime.now(timezone.utc)
