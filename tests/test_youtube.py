@@ -44,7 +44,8 @@ class FakeService:
             self.playlist_ids[kw["body"]["snippet"]["title"]] = pid
             return {"id": pid}
         if (resource, method) == ("channels", "list"):
-            return {"items": [{"id": "UC1", "contentDetails": {"relatedPlaylists": {"uploads": "UU1"}}}]}
+            return {"items": [{"id": "UC1", "snippet": {"title": "Betreazen highlights Dota 2"},
+                               "contentDetails": {"relatedPlaylists": {"uploads": "UU1"}}}]}
         if (resource, method) == ("playlistItems", "list") and "videoId" in kw:
             return {"items": [{"id": "item"}] if (kw["playlistId"], kw["videoId"]) in self.added else []}
         if (resource, method) == ("playlistItems", "insert"):
@@ -112,6 +113,38 @@ def test_unlist_changes_privacy_and_never_deletes():
     update = [kw for r, m, kw in service.calls if (r, m) == ("videos", "update")][0]
     assert update["body"]["status"]["privacyStatus"] == "unlisted" and update["body"]["id"] == "weak"
     assert not [c for c in service.calls if c[1] == "delete"]
+
+
+def test_login_button_always_opens_browser_even_with_a_valid_token(tmp_path, monkeypatch):
+    import google.oauth2.credentials as credentials
+    import google_auth_oauthlib.flow as flow
+    import googleapiclient.discovery as discovery
+
+    token = tmp_path / "token.json"
+    token.write_text('{"old": true}')
+    logins = []
+
+    class Creds:
+        valid, expired, refresh_token = True, False, "refresh"
+
+        def to_json(self):
+            return '{"new": true}'
+
+    class Flow:
+        def run_local_server(self, **kwargs):
+            logins.append(kwargs)
+            return Creds()
+
+    monkeypatch.setattr(flow.InstalledAppFlow, "from_client_secrets_file", lambda *a, **k: Flow())
+    monkeypatch.setattr(credentials.Credentials, "from_authorized_user_file", lambda *a, **k: Creds())
+    monkeypatch.setattr(discovery, "build", lambda *a, **k: FakeService())
+
+    c = YoutubeClient(str(tmp_path / "secret.json"), str(token))
+    c.connect(interactive=False)
+    assert logins == [] and token.read_text() == '{"old": true}'  # background use keeps the saved token
+    c.connect(interactive=True)
+    assert len(logins) == 1 and token.read_text() == '{"new": true}'
+    assert c.channel_title == "Betreazen highlights Dota 2"
 
 
 def test_connect_without_token_is_not_interactive(tmp_path):

@@ -65,7 +65,8 @@ class YoutubeClient:
         from googleapiclient.discovery import build
 
         creds = None
-        if self.token_file.exists():
+        # the login button must always open the browser, even with a valid token (switch account/channel, re-consent)
+        if not interactive and self.token_file.exists():
             creds = Credentials.from_authorized_user_file(str(self.token_file), SCOPES)
             if not creds.valid and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
