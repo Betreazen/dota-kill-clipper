@@ -128,6 +128,46 @@ def metadata(kills: int, assists: int, kda, channel: str, credit: str = "", now:
     return {"title": title, "description": build(paragraphs, keywords), "tags": tags, "language": language}
 
 
+PLAYLIST_ALL = "Dota 2"
+
+
+def playlist_title(kills: int | None) -> str:
+    return PLAYLIST_ALL if not kills else f"{kills} kill video"
+
+
+def playlist_description(kills: int | None, channel: str, dictionary: dict | None = None) -> str:
+    """SEO description of 'Dota 2' (kills=None) or 'N kill video': RU and EN texts, keywords, hashtags, up to 5000 bytes.
+
+    Deterministic per playlist, so re-syncing does not reshuffle the text.
+    """
+    d = dictionary or load_dictionary()
+    category = "all" if not kills else kill_category(kills)
+    title = playlist_title(kills)
+    rng = random.Random(title)
+    keep = (lambda text: True) if not kills else (lambda text: fits_category(text, category))
+    paragraphs = [p.format(title=title, channel=channel, count=action_text(kills or 0, 0, lang))
+                  for lang in ("ru", "en") for p in d["playlists"][category][lang]]
+    keywords = {lang: [k for k in d[lang]["keywords"] if keep(k)] for lang in ("ru", "en")}
+    for words in keywords.values():
+        rng.shuffle(words)
+    firsts = {h.lower() for h in FIRST_HASHTAGS}
+    pool = sorted({h for lang in ("ru", "en") for h in d[lang]["hashtags"] if keep(h) and h.lower() not in firsts})
+    hashtags = " ".join("#" + h for h in FIRST_HASHTAGS + rng.sample(pool, min(HASHTAG_COUNT - len(FIRST_HASHTAGS), len(pool))))
+    chosen: dict[str, list[str]] = {"ru": [], "en": []}
+
+    def build() -> str:
+        lines = [*paragraphs] + [KEYWORDS_LABEL[lang] + ", ".join(chosen[lang]) for lang in ("ru", "en") if chosen[lang]]
+        return _clean("\n\n".join(lines + [hashtags]))
+
+    for i in range(max(len(w) for w in keywords.values())):
+        for lang in ("ru", "en"):  # alternate so both languages get keywords
+            if i < len(keywords[lang]):
+                chosen[lang].append(keywords[lang][i])
+                if len(build().encode()) > DESCRIPTION_BYTES:
+                    chosen[lang].pop()
+    return build()
+
+
 def write_atomic(path: Path, text: str) -> None:
     """Temp file + replace: a crash mid-write never leaves a truncated JSON behind."""
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -14,14 +14,18 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .publishing import action_text, review
+from .publishing import playlist_description, playlist_title, review
 
 SCOPES = ["https://www.googleapis.com/auth/youtube", "https://www.googleapis.com/auth/youtube.upload"]
 CHANNEL_HANDLE = "@Betreazen_highlights"
+CHANNEL_NAME = "Betreazen highlights Dota 2"
+SYNC_KILL_PLAYLISTS = 5  # "1 kill video" ... "5 kill video" exist up front; 6+ are created on demand
 CATEGORY_GAMING = "20"
 REVIEW_MIN_AGE = timedelta(days=30)
 RECHECK_AFTER = 60.0  # seconds between silent reconnect attempts
 REVOKE_URL = "https://oauth2.googleapis.com/revoke"
+PLAYLIST_LIST_LAG = 3600  # seconds a freshly created playlist id is trusted without playlists.list
+STATUS_WRITABLE = ("privacyStatus", "embeddable", "license", "publicStatsViewable", "selfDeclaredMadeForKids")
 
 
 class NotLoggedIn(RuntimeError):
@@ -37,18 +41,16 @@ def _revoke(token: str) -> None:
 
 def playlists_for(kills: int) -> list[tuple[str, str]]:
     """'Dota 2' gets every video; 'N kill video' gets clips with N kills (assists allowed)."""
-    items = [("Dota 2", "Все хайлайты Dota 2 на Techies: убийства, ассисты, мины и взрывы. "
-                        "All Dota 2 Techies highlights: kills, assists, mines and explosions.")]
-    if kills:
-        items.append((f"{kills} kill video",
-                      f"Dota 2 Techies: клипы, где {action_text(kills, 0, 'ru')} (с ассистами тоже). "
-                      f"Dota 2 Techies clips with {action_text(kills, 0, 'en')}, assists included."))
-    return items
+    counts = [None, kills] if kills else [None]
+    return [(playlist_title(k), playlist_description(k, CHANNEL_NAME)) for k in counts]
 
 
 class YoutubeClient:
-    def __init__(self, credentials_file: str, token_file: str, handle: str = CHANNEL_HANDLE):
+    def __init__(self, credentials_file: str, token_file: str, handle: str = CHANNEL_HANDLE,
+                 playlist_cache: str | None = None):
         self.credentials_file, self.token_file, self.handle = credentials_file, Path(token_file), handle
+        self.playlist_cache = Path(playlist_cache) if playlist_cache else None
+        self._created: dict[str, list] = {}  # title -> [playlist id, created at]
         self.service = None
         self.channel_id = None
         self.channel_title = ""
@@ -138,14 +140,49 @@ class YoutubeClient:
                     "snippet": {"title": title, "description": description},
                     "status": {"privacyStatus": "public"}}).execute()
                 existing[title] = created["id"]
+                self._remember_playlist(title, created["id"])
             elif self.service.playlistItems().list(part="id", playlistId=existing[title],
                                                    videoId=video_id).execute().get("items"):
                 continue  # retry after a partial failure: do not add the same video twice
             self.service.playlistItems().insert(part="snippet", body={"snippet": {
                 "playlistId": existing[title], "resourceId": {"kind": "youtube#video", "videoId": video_id}}}).execute()
 
+    def sync_playlists(self, max_kills: int = SYNC_KILL_PLAYLISTS) -> dict[str, str]:
+        """Create missing playlists and rewrite descriptions of existing ones. Returns title -> action."""
+        existing = self._playlist_ids()
+        result = {}
+        for kills in [None, *range(1, max_kills + 1)]:
+            snippet = {"title": playlist_title(kills), "description": playlist_description(kills, CHANNEL_NAME)}
+            if snippet["title"] in existing:  # update needs the title; an omitted description would be wiped
+                self.service.playlists().update(part="snippet", body={"id": existing[snippet["title"]], "snippet": snippet}).execute()
+                result[snippet["title"]] = "updated"
+            else:
+                created = self.service.playlists().insert(part="snippet,status", body={
+                    "snippet": snippet, "status": {"privacyStatus": "public"}}).execute()
+                existing[snippet["title"]] = created["id"]
+                self._remember_playlist(snippet["title"], created["id"])
+                result[snippet["title"]] = "created"
+        return result
+
+    def _recent_playlists(self) -> dict[str, list]:
+        data = dict(self._created)
+        if self.playlist_cache:
+            try:
+                data.update(json.loads(self.playlist_cache.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
+        return {title: v for title, v in data.items() if time.time() - v[1] < PLAYLIST_LIST_LAG}
+
+    def _remember_playlist(self, title: str, playlist_id: str) -> None:
+        self._created[title] = [playlist_id, time.time()]
+        if self.playlist_cache:
+            data = {**self._recent_playlists(), title: self._created[title]}
+            self.playlist_cache.parent.mkdir(parents=True, exist_ok=True)
+            self.playlist_cache.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
     def _playlist_ids(self) -> dict[str, str]:
-        ids = {}
+        # playlists.list can miss a playlist for a while after it is created: fall back to what we created recently
+        ids = {title: v[0] for title, v in self._recent_playlists().items()}
         request = self.service.playlists().list(part="snippet", mine=True, maxResults=50)
         while request:
             page = request.execute()
@@ -179,14 +216,20 @@ class YoutubeClient:
             items = self.service.videos().list(part="status", id=vid).execute().get("items", [])
             if not items:
                 continue
-            status = {**items[0]["status"], "privacyStatus": "unlisted"}  # keep license/embeddable/etc.
+            # only writable fields: with read-only ones (uploadStatus, madeForKids...) YouTube silently ignores the change
+            current = items[0]["status"]
+            status = {"privacyStatus": "unlisted",
+                      **{k: current[k] for k in STATUS_WRITABLE if k in current and k != "privacyStatus"}}
             self.service.videos().update(part="status", body={"id": vid, "status": status}).execute()
 
 
 if __name__ == "__main__":
     command, secret = sys.argv[1], sys.argv[2]
     data_dir = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "dota-kill-clipper"
-    yt = YoutubeClient(secret, str(data_dir / "youtube-token.json")).connect(interactive=command == "login")
+    yt = YoutubeClient(secret, str(data_dir / "youtube-token.json"),
+                       playlist_cache=str(data_dir / "playlists.json")).connect(interactive=command == "login")
     print(f"channel: {yt.channel_title} ({yt.channel_id})")
     if command == "review":
         print(json.dumps(review(yt.review_counts()), ensure_ascii=False, indent=1))
+    if command == "playlists":  # create missing playlists and refresh their SEO descriptions
+        print(json.dumps(yt.sync_playlists(), ensure_ascii=False, indent=1))

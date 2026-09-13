@@ -26,6 +26,7 @@ class Resource:
 class FakeService:
     def __init__(self, playlists=(), videos=()):
         self.calls, self.playlist_ids, self.video_items, self.added = [], dict(playlists), list(videos), set()
+        self.listed = dict(playlists)
 
     def record(self, resource, method, kwargs):
         self.calls.append((resource, method, kwargs))
@@ -37,8 +38,8 @@ class FakeService:
     def respond(self, resource, method, kw):
         if (resource, method) == ("videos", "insert"):
             return {"id": "new-video"}
-        if (resource, method) == ("playlists", "list"):
-            return {"items": [{"id": pid, "snippet": {"title": t}} for t, pid in self.playlist_ids.items()]}
+        if (resource, method) == ("playlists", "list"):  # lags like YouTube: new playlists are not listed yet
+            return {"items": [{"id": pid, "snippet": {"title": t}} for t, pid in self.listed.items()]}
         if (resource, method) == ("playlists", "insert"):
             pid = f"pl-{len(self.playlist_ids)}"
             self.playlist_ids[kw["body"]["snippet"]["title"]] = pid
@@ -98,7 +99,10 @@ def test_upload_is_private_scheduled_and_added_to_playlists(tmp_path):
 def video(vid, views, days_old, privacy="public"):
     published = (datetime(2026, 9, 1, tzinfo=timezone.utc) - timedelta(days=days_old)).isoformat().replace("+00:00", "Z")
     return {"id": vid, "snippet": {"publishedAt": published, "title": vid, "categoryId": "20"},
-            "status": {"privacyStatus": privacy}, "statistics": {"viewCount": str(views)}}
+            "status": {"privacyStatus": privacy, "uploadStatus": "processed", "madeForKids": False,
+                       "selfDeclaredMadeForKids": False, "embeddable": True, "license": "youtube",
+                       "publicStatsViewable": True},
+            "statistics": {"viewCount": str(views)}}
 
 
 def test_review_counts_only_public_videos_older_than_30_days():
@@ -112,7 +116,36 @@ def test_unlist_changes_privacy_and_never_deletes():
     client(service).unlist(["weak"])
     update = [kw for r, m, kw in service.calls if (r, m) == ("videos", "update")][0]
     assert update["body"]["status"]["privacyStatus"] == "unlisted" and update["body"]["id"] == "weak"
+    # read-only fields make YouTube silently ignore the whole status change (seen on publishAt, 2026-09-13)
+    assert set(update["body"]["status"]) == {"privacyStatus", "embeddable", "license", "publicStatsViewable",
+                                             "selfDeclaredMadeForKids"}
     assert not [c for c in service.calls if c[1] == "delete"]
+
+
+def test_new_playlist_is_not_created_twice_while_youtube_does_not_list_it_yet(tmp_path):
+    service = FakeService()
+    first = client(service)
+    first.playlist_cache = tmp_path / "playlists.json"
+    first.add_to_playlists("v1", 2)
+    restarted = client(service)  # e.g. OBS restarted right after the first upload
+    restarted.playlist_cache = tmp_path / "playlists.json"
+    restarted.add_to_playlists("v2", 2)
+    created = [kw["body"]["snippet"]["title"] for r, m, kw in service.calls if (r, m) == ("playlists", "insert")]
+    assert created == ["Dota 2", "2 kill video"]
+    items = [kw["body"]["snippet"]["playlistId"] for r, m, kw in service.calls if (r, m) == ("playlistItems", "insert")]
+    assert items == ["pl-0", "pl-1", "pl-0", "pl-1"]
+
+
+def test_sync_playlists_updates_existing_and_creates_missing_with_seo_descriptions():
+    service = FakeService(playlists={"Dota 2": "pl-dota"})
+    assert client(service).sync_playlists(max_kills=2) == \
+        {"Dota 2": "updated", "1 kill video": "created", "2 kill video": "created"}
+    update = [kw["body"] for r, m, kw in service.calls if (r, m) == ("playlists", "update")][0]
+    assert update["id"] == "pl-dota" and update["snippet"]["title"] == "Dota 2"
+    assert len(update["snippet"]["description"].encode()) > 4000
+    created = [kw["body"] for r, m, kw in service.calls if (r, m) == ("playlists", "insert")]
+    assert [b["snippet"]["title"] for b in created] == ["1 kill video", "2 kill video"]
+    assert all(b["status"]["privacyStatus"] == "public" and len(b["snippet"]["description"]) > 2000 for b in created)
 
 
 def test_login_button_always_opens_browser_even_with_a_valid_token(tmp_path, monkeypatch):

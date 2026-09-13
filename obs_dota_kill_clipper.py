@@ -165,7 +165,9 @@ def install_gsi_cfg(props, prop):
 
 # ---- YouTube --------------------------------------------------------------------------
 def make_youtube(cfg):
-    return YoutubeClient(cfg["youtube_credentials"], YOUTUBE_TOKEN) if cfg["youtube_credentials"] else None
+    if not cfg["youtube_credentials"]:
+        return None
+    return YoutubeClient(cfg["youtube_credentials"], YOUTUBE_TOKEN, playlist_cache=os.path.join(DATA_DIR, "playlists.json"))
 
 
 def youtube_login(props, prop):

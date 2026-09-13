@@ -14,11 +14,11 @@ ID канала из токена с ID этого handle; токен друго
 4. Библиотеки для Python OBS:
    `%LOCALAPPDATA%\Python\pythoncore-3.12-64\python.exe -m pip install -r requirements-youtube.txt`.
 
-## 2. Аудит (обязательно для публикации)
-Google ограничивает непроверенные проекты: **все видео, загруженные через `videos.insert` из проекта без аудита, остаются приватными**,
-и запланированная публикация их не откроет. Нужно подать форму *YouTube API Services — Audit and Quota Extension Form*
+## 2. Аудит
+По документации Google видео из проекта без аудита могут оставаться приватными. Проверено 2026-09-13: на этом проекте
+запланированное видео стало публичным в назначенное время ещё до одобрения аудита. Аудит подан на всякий случай. Нужно подать форму *YouTube API Services — Audit and Quota Extension Form*
 (support.google.com/youtube/contact/yt_api_form). Готовые ответы и файлы для загрузки — в [YOUTUBE_AUDIT.md](YOUTUBE_AUDIT.md).
-До прохождения аудита скрипт работает полностью, но видео придётся открывать вручную в YouTube Studio.
+Ответ Google придёт на контактную почту из формы.
 
 ## 3. Вход
 1. В панели скрипта включить «Upload Shorts to YouTube», выбрать JSON клиента.
@@ -37,6 +37,8 @@ python -m killclipper.youtube review "C:\Highlights\json-login\client_secret_…
 2. Рабочий поток монтирует Short в `…\shorts\`, затем загружает его как `private` с `publishAt`
    в ближайший свободный слот 08:00, 10:00 … 22:00 (Europe/Minsk, не ближе 15 минут). Занятые слоты — в `schedule.json`.
 3. Видео добавляется в плейлист «Dota 2» и, если есть убийства, в «N kill video». Плейлисты создаются сами, публичные, с описанием.
+Описания плейлистов SEO-шные (RU + EN, ключевые слова, хештеги). Обновить их на канале после правки словаря:
+   `python -m killclipper.youtube playlists "C:\Highlights\json-login\client_secret_….json"`.
 4. Ошибка загрузки (сеть, квота) → повтор с паузой до 1 часа, до 10 попыток; слот освобождается. Без входа задания ждут.
 
 ## 5. Ежемесячный срез

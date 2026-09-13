@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from killclipper.publishing import (Schedule, action_text, fit_tags, kill_category, load_dictionary, metadata,
-                                    review, tag_cost)
+                                    playlist_description, review, tag_cost)
 
 CHANNEL = "Betreazen highlights Dota 2"
 CREDIT = '"Hot Pursuit" Kevin MacLeod (incompetech.com)'
@@ -85,6 +85,21 @@ def test_real_dictionary_fills_limits_in_both_languages():
             assert CREDIT in item["description"] and "{" not in item["description"]
             assert 440 <= tag_cost(item["tags"]) <= 500
             assert "dota 2 2026" in item["tags"]
+
+
+def test_playlist_descriptions_are_long_bilingual_seo_texts():
+    for kills in (None, 1, 2, 3, 4, 5, 6):
+        text = playlist_description(kills, CHANNEL)
+        size = len(text.encode())
+        assert 4000 <= size <= 5000, (kills, size)
+        assert "Techies" in text and "Течис" in text and CHANNEL in text
+        assert "Ключевые слова: " in text and "Keywords: " in text and "#Dota2 #Techies #Shorts" in text
+        assert "{" not in text and "<" not in text
+        assert text == playlist_description(kills, CHANNEL)  # stable: re-sync does not reshuffle
+    assert "«3 kill video»" in playlist_description(3, CHANNEL) and "3 убийства" in playlist_description(3, CHANNEL)
+    assert "6 убийств" in playlist_description(6, CHANNEL)
+    double = playlist_description(2, CHANNEL).lower()
+    assert "даблкилл" in double and not [w for w in ("трипл", "triple", "рампаг", "rampage") if w in double]
 
 
 def test_text_never_names_a_different_kill_streak():

@@ -81,7 +81,10 @@ C:\Highlights\2026-09-09 21-35 pudge (match 8954164528)\
 ## Разработка
 ```
 python -m pytest -q          # Python 3.14 (код совместим с 3.12)
+%LOCALAPPDATA%\Python\pythoncore-3.12-64\python.exe tools\healthcheck.py   # проверка окружения, только чтение
+python -m killclipper.youtube playlists "<client_secret.json>"                # плейлисты и их SEO-описания
 ```
+Точка входа для продолжения разработки: [docs/HANDOFF.md](docs/HANDOFF.md).
 Структура: `obs_dota_kill_clipper.py` (обвязка OBS) · `killclipper/` (`gsi`, `series`, `naming`, `cut`,
 `dota_paths`, `clipper`, `render`, `publishing`, `youtube`, `pipeline`, `seo_dictionary.json`) · `tools/` · `tests/` · `docs/` (спека, план, память задачи, сценарии).
 Вне стандартной библиотеки — только библиотеки Google для YouTube (`requirements-youtube.txt`). Правила для Claude Code — в [CLAUDE.md](CLAUDE.md).
