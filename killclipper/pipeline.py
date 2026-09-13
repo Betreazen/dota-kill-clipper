@@ -40,7 +40,7 @@ class Pipeline:
         self._render, self._clock, self._rng = render, clock, rng
         self._lock = threading.Lock()
         self._wake, self._stop = threading.Event(), threading.Event()
-        self._login_requested = False
+        self._login_requested = self._logout_requested = False
         self._review_retry_at = 0.0
         self._logs: dict[str, MatchLog] = {}
         self.jobs: list[dict] = self._load("jobs.json", [])
@@ -72,6 +72,10 @@ class Pipeline:
         self._login_requested = True
         self._wake.set()
 
+    def request_logout(self) -> None:
+        self._logout_requested = True
+        self._wake.set()
+
     def status(self) -> str:
         with self._lock:
             stages = Counter(j["stage"] for j in self.jobs)
@@ -101,9 +105,13 @@ class Pipeline:
     def process_once(self, now: float | None = None) -> bool:
         """Do one unit of work. Returns False when nothing is due."""
         now = self._clock() if now is None else now
+        if self._logout_requested and self.youtube:
+            self._logout_requested = self._login_requested = False
+            self._logout()
+            return True
         if self._login_requested and self.youtube:
-            self._login_requested = False
             self._login()
+            self._login_requested = False  # presses while the browser was open are dropped
             return True
         if self._review_due(now):
             self._review(now)
@@ -134,6 +142,14 @@ class Pipeline:
         except Exception as e:
             self.youtube_state = f"login failed: {e}"
             self.log.error("YouTube login failed: %s", e)
+
+    def _logout(self) -> None:
+        try:
+            self.youtube.logout()
+            self.log.info("YouTube: logged out, access revoked at Google")
+        except Exception as e:
+            self.log.warning("YouTube: logged out locally, revoking at Google failed: %s", e)
+        self.youtube_state = "logged out (press 'Log in to YouTube')"
 
     def _next_job(self, now: float) -> dict | None:
         with self._lock:

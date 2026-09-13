@@ -147,6 +147,30 @@ def test_login_button_always_opens_browser_even_with_a_valid_token(tmp_path, mon
     assert c.channel_title == "Betreazen highlights Dota 2"
 
 
+def test_logout_forgets_token_and_revokes_the_grant(tmp_path):
+    token = tmp_path / "token.json"
+    token.write_text('{"token": "access", "refresh_token": "refresh"}')
+    revoked = []
+    c = client(FakeService())
+    c.token_file = token
+    c.logout(revoke=revoked.append)
+    assert revoked == ["refresh"] and not token.exists()
+    assert c.service is None and c.channel_id is None and c.authorized() is False
+
+
+def test_logout_removes_local_token_even_if_google_is_unreachable(tmp_path):
+    token = tmp_path / "token.json"
+    token.write_text('{"refresh_token": "refresh"}')
+    c = YoutubeClient("secret.json", str(token))
+
+    def offline(value):
+        raise OSError("no network")
+
+    with pytest.raises(OSError):
+        c.logout(revoke=offline)
+    assert not token.exists()
+
+
 def test_connect_without_token_is_not_interactive(tmp_path):
     c = YoutubeClient(str(tmp_path / "secret.json"), str(tmp_path / "token.json"))
     with pytest.raises(NotLoggedIn):

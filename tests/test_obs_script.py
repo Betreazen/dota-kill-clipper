@@ -128,6 +128,8 @@ def test_update_restarts_server_on_port_change_and_properties_build(script):
     props = mod.script_properties()
     assert [name for name, _ in props][:3] == ["add_path", "add_int", "add_int"]
     assert ("add_button", "install") in props and ("add_text", "status") in props
+    assert ("add_button", "youtube_login") in props and ("add_button", "youtube_logout") in props
+    assert mod.youtube_logout(None, None) is False  # no OAuth client JSON configured: nothing to log out of
 
 
 def test_install_button_creates_token_and_cfg(script, tmp_path, monkeypatch):

@@ -9,6 +9,8 @@ import json
 import os
 import sys
 import time
+import urllib.parse
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -19,10 +21,18 @@ CHANNEL_HANDLE = "@Betreazen_highlights"
 CATEGORY_GAMING = "20"
 REVIEW_MIN_AGE = timedelta(days=30)
 RECHECK_AFTER = 60.0  # seconds between silent reconnect attempts
+REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 
 
 class NotLoggedIn(RuntimeError):
     pass
+
+
+def _revoke(token: str) -> None:
+    body = urllib.parse.urlencode({"token": token}).encode()
+    request = urllib.request.Request(REVOKE_URL, data=body,
+                                     headers={"Content-Type": "application/x-www-form-urlencoded"})
+    urllib.request.urlopen(request, timeout=15).close()
 
 
 def playlists_for(kills: int) -> list[tuple[str, str]]:
@@ -87,6 +97,18 @@ class YoutubeClient:
             raise RuntimeError(f"Logged in as channel '{got}', expected {self.handle}; log in again and pick it")
         self.service, self.channel_id, self.channel_title = service, target[0]["id"], target[0]["snippet"]["title"]
         return self
+
+    def logout(self, revoke=None) -> None:
+        """Forget the saved token, then revoke the grant at Google (raises if Google is unreachable)."""
+        try:
+            saved = json.loads(self.token_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            saved = {}
+        self.service, self.channel_id, self.channel_title = None, None, ""
+        self.token_file.unlink(missing_ok=True)
+        token = saved.get("refresh_token") or saved.get("token")
+        if token:
+            (revoke or _revoke)(token)
 
     def _save(self, creds) -> None:
         self.token_file.parent.mkdir(parents=True, exist_ok=True)

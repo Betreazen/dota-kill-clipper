@@ -22,7 +22,16 @@ class FakeYoutube:
     def connect(self, interactive=False):
         self.logins += 1
         self.logged_in = True
+        if self.on_connect:
+            self.on_connect()
         return self
+
+    on_connect = None
+    logouts = 0
+
+    def logout(self):
+        self.logouts += 1
+        self.logged_in = False
 
     def insert(self, path, meta, publish_at):
         if self.quota:
@@ -139,6 +148,31 @@ def test_upload_waits_for_login_and_survives_restart(tmp_path):
     restarted.request_login()
     run_all(restarted)
     assert yt.logins == 1 and yt.inserted and restarted.jobs[0]["stage"] == "done"
+
+
+def test_login_presses_during_an_open_login_are_ignored(tmp_path):
+    yt = FakeYoutube(logged_in=False)
+    p, _ = make(tmp_path, yt)
+    yt.on_connect = p.request_login  # user presses the button again while the browser is open
+    p.request_login()
+    run_all(p)
+    assert yt.logins == 1
+
+
+def test_logout_stops_uploads_until_next_login(tmp_path):
+    yt = FakeYoutube()
+    p, _ = make(tmp_path, yt)
+    run_all(p)
+    p.request_logout()
+    run_all(p)
+    assert yt.logouts == 1 and "YouTube: logged out" in p.status()
+    clip, log, idx = clip_with_log(tmp_path)
+    p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
+    run_all(p)
+    assert p.jobs[0]["stage"] == "upload" and not yt.inserted
+    p.request_login()
+    run_all(p)
+    assert yt.inserted and p.jobs[0]["stage"] == "done"
 
 
 def test_failed_upload_releases_slot_and_retries_later(tmp_path):

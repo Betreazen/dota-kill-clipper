@@ -176,6 +176,14 @@ def youtube_login(props, prop):
     return True
 
 
+def youtube_logout(props, prop):
+    if not pipeline or not pipeline.youtube:
+        return False
+    log.info("YouTube: logging out")
+    pipeline.request_logout()
+    return True
+
+
 # ---- tick ----------------------------------------------------------------------------
 def tick():
     global buffer_start_at
@@ -257,6 +265,7 @@ def script_properties():
     obs.obs_properties_add_path(p, "youtube_credentials", "Google OAuth client JSON", obs.OBS_PATH_FILE,
                                 "JSON (*.json)", None)
     obs.obs_properties_add_button(p, "youtube_login", "Log in to YouTube", youtube_login)
+    obs.obs_properties_add_button(p, "youtube_logout", "Log out of YouTube", youtube_logout)
     obs.obs_properties_add_button(p, "install", "Install GSI config into Dota 2", install_gsi_cfg)
     obs.obs_properties_add_text(p, "status", status_text(), obs.OBS_TEXT_INFO)
     obs.obs_properties_add_button(p, "refresh", "Refresh status", lambda props, prop: True)
