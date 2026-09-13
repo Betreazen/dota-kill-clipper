@@ -141,13 +141,17 @@ class Schedule:
 
     def __init__(self, path: Path, tz_name: str = "Europe/Minsk"):
         self.path, self.zone = Path(path), zone(tz_name)
+        self.used = self._read()
+
+    def _read(self) -> set[str]:
         try:
-            self.used = set(json.loads(self.path.read_text(encoding="utf-8")))
+            return set(json.loads(self.path.read_text(encoding="utf-8")))
         except (OSError, ValueError):
-            self.used = set()
+            return set()
 
     def reserve(self, now: datetime | None = None, margin: timedelta = SLOT_MARGIN) -> datetime:
         now = (now or datetime.now(self.zone)).astimezone(self.zone)
+        self.used |= self._read()  # slots taken by another process (OBS vs. a manual upload) stay taken
         day = now.date()
         while True:
             for hour in SLOT_HOURS:

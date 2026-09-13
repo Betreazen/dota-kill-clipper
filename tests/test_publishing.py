@@ -124,6 +124,14 @@ def test_schedule_skips_near_and_used_slots_and_persists(tmp_path):
     assert Schedule(tmp_path / "schedule.json").reserve(datetime(2026, 9, 13, 21, 50, tzinfo=zone)) == late
 
 
+def test_two_processes_never_get_the_same_slot(tmp_path):
+    obs_side = Schedule(tmp_path / "s.json")
+    manual = Schedule(tmp_path / "s.json")  # both loaded before any reservation
+    now = datetime(2026, 9, 13, 9, 0, tzinfo=obs_side.zone)
+    assert manual.reserve(now).hour == 10
+    assert obs_side.reserve(now).hour == 12
+
+
 def test_schedule_fills_whole_day_then_next_day(tmp_path):
     plan = Schedule(tmp_path / "s.json")
     now = datetime(2026, 9, 13, 7, 0, tzinfo=plan.zone)
