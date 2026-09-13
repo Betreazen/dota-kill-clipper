@@ -147,6 +147,16 @@ def test_two_processes_never_get_the_same_slot(tmp_path):
     assert obs_side.reserve(now).hour == 12
 
 
+def test_release_preserves_reservations_from_other_instances(tmp_path):
+    a = Schedule(tmp_path / 'slots.json')
+    b = Schedule(tmp_path / 'slots.json')
+    now = datetime.now(a.zone)
+    first = a.reserve(now)
+    second = b.reserve(now)
+    a.release(first)
+    assert second.isoformat() in Schedule(a.path).used
+
+
 def test_schedule_fills_whole_day_then_next_day(tmp_path):
     plan = Schedule(tmp_path / "s.json")
     now = datetime(2026, 9, 13, 7, 0, tzinfo=plan.zone)

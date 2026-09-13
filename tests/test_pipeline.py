@@ -175,17 +175,76 @@ def test_logout_stops_uploads_until_next_login(tmp_path):
     assert yt.inserted and p.jobs[0]["stage"] == "done"
 
 
-def test_failed_upload_releases_slot_and_retries_later(tmp_path):
+def test_unknown_upload_retains_slot_and_does_not_retry(tmp_path):
     yt = FakeYoutube(fail_insert=1)
     p, _ = make(tmp_path, yt)
     clip, log, idx = clip_with_log(tmp_path)
     p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
     run_all(p)
     job = p.jobs[0]
-    assert job["stage"] == "upload" and job["attempts"] == 1 and "connection reset" in job["error"]
-    assert json.loads((tmp_path / "state" / "schedule.json").read_text()) == []
+    assert job["stage"] == "upload_unknown" and "connection reset" in job["error"]
+    assert len(json.loads((tmp_path / "state" / "schedule.json").read_text())) == 1
     run_all(p, now=job["next_try"])
-    assert job["stage"] == "done" and yt.inserted[0][2].hour == 10
+    assert job["stage"] == "upload_unknown" and not yt.inserted
+
+
+def test_lost_success_response_does_not_create_duplicate_after_restart(tmp_path):
+    class LostResponse(FakeYoutube):
+        def insert(self, *args):
+            super().insert(*args)
+            raise OSError('response lost after success')
+    yt = LostResponse()
+    p, _ = make(tmp_path, yt, vertical=False)
+    clip, log, idx = clip_with_log(tmp_path)
+    p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
+    run_all(p)
+    restarted, _ = make(tmp_path, yt, vertical=False)
+    run_all(restarted, NOW + 3600)
+    assert len(yt.inserted) == 1
+    assert restarted.jobs[0]['stage'] == 'upload_unknown'
+
+
+def test_interrupted_upload_is_quarantined(tmp_path):
+    p, _ = make(tmp_path, FakeYoutube(), vertical=False)
+    clip, log, idx = clip_with_log(tmp_path)
+    job = p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
+    job['stage'] = 'uploading'
+    with p._lock:
+        p._save_jobs()
+    restarted, _ = make(tmp_path, FakeYoutube(), vertical=False)
+    run_all(restarted)
+    assert restarted.jobs[0]['stage'] == 'upload_unknown'
+    assert not restarted.youtube.inserted
+
+
+def test_reload_waits_for_old_worker_and_renders_only_once(tmp_path):
+    import threading
+    entered, release = threading.Event(), threading.Event()
+    p, calls = make(tmp_path, youtube_enabled=False)
+    base = p._render
+    def blocked(*args):
+        entered.set()
+        assert release.wait(5)
+        return base(*args)
+    p._render = blocked
+    clip, log, idx = clip_with_log(tmp_path)
+    p.submit(str(clip), 1, 0, (1, 0, 0), log, idx)
+    p.start()
+    assert entered.wait(5)
+    p.stop()
+    restarted, new_calls = make(tmp_path, youtube_enabled=False)
+    restarted.start()
+    release.set()
+    p._thread.join(5)
+    # Wait for the new owner to load the finished render, then stop it.
+    import time
+    deadline = time.monotonic() + 5
+    while restarted.jobs[0]['stage'] == 'render' and time.monotonic() < deadline:
+        time.sleep(0.02)
+    restarted.stop()
+    restarted._thread.join(5)
+    assert len(calls) == 1 and not new_calls
+    assert restarted.jobs[0]['stage'] == 'upload'
 
 
 def test_quota_error_waits_for_daily_reset_without_using_attempts(tmp_path):

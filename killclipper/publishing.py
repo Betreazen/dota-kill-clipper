@@ -7,6 +7,7 @@ from functools import lru_cache
 from pathlib import Path
 from statistics import median
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from .locking import FileLock
 
 DICTIONARY = Path(__file__).with_name("seo_dictionary.json")
 SLOT_HOURS = tuple(range(8, 23, 2))  # 08:00 ... 22:00, every two hours
@@ -186,12 +187,16 @@ class Schedule:
     def _read(self) -> set[str]:
         try:
             return set(json.loads(self.path.read_text(encoding="utf-8")))
-        except (OSError, ValueError):
+        except FileNotFoundError:
             return set()
 
     def reserve(self, now: datetime | None = None, margin: timedelta = SLOT_MARGIN) -> datetime:
+        with FileLock(self.path.with_suffix('.lock')):
+            return self._reserve(now, margin)
+
+    def _reserve(self, now, margin):
         now = (now or datetime.now(self.zone)).astimezone(self.zone)
-        self.used |= self._read()  # slots taken by another process (OBS vs. a manual upload) stay taken
+        self.used = self._read()
         day = now.date()
         while True:
             for hour in SLOT_HOURS:
@@ -203,8 +208,10 @@ class Schedule:
             day += timedelta(days=1)
 
     def release(self, slot: datetime) -> None:
-        self.used.discard(slot.astimezone(self.zone).isoformat())
-        self._save(datetime.now(self.zone))
+        with FileLock(self.path.with_suffix('.lock')):
+            self.used = self._read()
+            self.used.discard(slot.astimezone(self.zone).isoformat())
+            self._save(datetime.now(self.zone))
 
     def _save(self, now: datetime) -> None:
         # past slots are dropped so the file stays small

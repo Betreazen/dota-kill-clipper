@@ -5,6 +5,7 @@ and the YouTube client is used from a single thread. Jobs persist in <state_dir>
 resume after an OBS restart. submit() runs on the OBS main thread and prepares the text right away.
 """
 import json
+import hashlib
 import random
 import threading
 import time
@@ -13,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .naming import MatchLog
+from .locking import FileLock
 from .publishing import Schedule, metadata, review, write_atomic
 from .render import choose_music, music_credit, render_vertical
 
@@ -47,6 +49,13 @@ class Pipeline:
         self.state: dict = self._load("state.json", {})
         self.schedule = Schedule(self.state_dir / "schedule.json", TIMEZONE)
         self.youtube_state = "not checked"
+        self._thread = None
+        self._recover_uploads()
+
+    def _recover_uploads(self):
+        for job in self.jobs:
+            if job['stage'] == 'uploading':
+                job.update(stage='upload_unknown', error='Upload interrupted; verify on YouTube before retrying')
 
     # ---- OBS main thread ------------------------------------------------------------
     def submit(self, clip: str, kills: int, assists: int, kda, match_log: MatchLog | None = None,
@@ -63,8 +72,14 @@ class Pipeline:
                "stage": "render" if vertical.get("enabled") else "upload",
                "attempts": 0, "next_try": 0, "video_id": None, "publish_at": None, "error": None}
         with self._lock:
-            self.jobs.append(job)
-            self._save_jobs()
+            for existing in self.jobs:
+                if existing['clip'] == str(clip):
+                    return existing
+            key = hashlib.sha256(str(clip).encode()).hexdigest()
+            self._save(f'inbox/{key}.json', job)
+            if self._thread is None:
+                self.jobs.append(job)
+                self._save_jobs()
         self._wake.set()
         return job
 
@@ -80,15 +95,33 @@ class Pipeline:
         with self._lock:
             stages = Counter(j["stage"] for j in self.jobs)
         youtube = self.youtube_state if self.youtube and self.cfg.get("youtube_enabled") else "off"
-        return (f"Shorts: render {stages['render']}, upload {stages['upload']}, failed {stages['failed']} | "
+        return (f"Shorts: render {stages['render']}, upload {stages['upload']}, failed {stages['failed']}, "
+                f"unknown {stages['upload_unknown']} | "
                 f"YouTube: {youtube}")
 
     def start(self) -> None:
-        threading.Thread(target=self._run, name="killclipper-pipeline", daemon=True).start()
+        if self._thread and self._thread.is_alive():
+            return
+        self._thread = threading.Thread(target=self._run_owned, name="killclipper-pipeline", daemon=True)
+        self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         self._wake.set()
+
+    def _run_owned(self):
+        ownership = FileLock(self.state_dir / 'pipeline.lock')
+        while not ownership.acquire():
+            if self._stop.wait(0.1):
+                return
+        try:
+            with self._lock:
+                self.jobs = self._load('jobs.json', [])
+                self.state = self._load('state.json', {})
+                self._recover_uploads()
+            self._run()
+        finally:
+            ownership.release()
 
     # ---- worker thread ----------------------------------------------------------------
     def _run(self) -> None:
@@ -104,6 +137,20 @@ class Pipeline:
 
     def process_once(self, now: float | None = None) -> bool:
         """Do one unit of work. Returns False when nothing is due."""
+        if self._stop.is_set():
+            return False
+        with self._lock:
+            inbox = list((self.state_dir / 'inbox').glob('*.json'))
+            known = {j['clip'] for j in self.jobs}
+            for path in inbox:
+                job = json.loads(path.read_text(encoding='utf-8'))
+                if job['clip'] not in known:
+                    self.jobs.append(job)
+                    known.add(job['clip'])
+            if inbox:
+                self._save_jobs()
+                for path in inbox:
+                    path.unlink()
         now = self._clock() if now is None else now
         if self._logout_requested and self.youtube:
             self._logout_requested = self._login_requested = False
@@ -186,14 +233,22 @@ class Pipeline:
         try:
             if not job["video_id"]:
                 slot = self.schedule.reserve(datetime.fromtimestamp(now, self.schedule.zone))
+                job.update(stage='uploading', publish_at=slot.isoformat())
+                with self._lock:
+                    self._save_jobs()
                 try:
                     video_id = self.youtube.insert(path, job["meta"], slot)
-                except Exception:
-                    self.schedule.release(slot)
-                    raise
-                job.update(video_id=video_id, publish_at=slot.isoformat())
+                except Exception as e:
+                    if any(reason in str(e) for reason in QUOTA_REASONS):
+                        self.schedule.release(slot)
+                        job.update(stage='upload', publish_at=None)
+                        raise
+                    job.update(stage='upload_unknown', error=f'{type(e).__name__}: {e}')
+                    self.log.error('Upload outcome unknown; slot retained, automatic re-upload disabled: %s', job['clip'])
+                    return
+                job.update(video_id=video_id, stage='upload', publish_at=slot.isoformat())
                 with self._lock:
-                    self._save_jobs()  # persisted before anything else can fail: a clip is never uploaded twice
+                    self._save_jobs()  # retries after this point only repair playlist membership
                 self._update_match(job, youtube_id=video_id, publish_at=slot.isoformat())
                 self.log.info("YouTube: %s uploaded as %s, publishes %s", Path(path).name, video_id, slot.isoformat())
             self.youtube.add_to_playlists(job["video_id"], job["kills"])
@@ -262,7 +317,7 @@ class Pipeline:
     def _load(self, name: str, default):
         try:
             return json.loads((self.state_dir / name).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except FileNotFoundError:
             return default
 
     def _save(self, name: str, data) -> None:

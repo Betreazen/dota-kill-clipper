@@ -7,6 +7,9 @@ cut_clip runs in a worker thread (spawn); its result is applied on the next tick
 finished clip is handed to on_clip (the Shorts/YouTube pipeline).
 """
 import queue
+import json
+import hashlib
+from dataclasses import asdict
 import threading
 from collections import deque
 from datetime import datetime
@@ -16,6 +19,8 @@ from .cut import cut_clip
 from .gsi import GsiTracker
 from .naming import MatchLog, clip_name, match_dir_name, unique_path
 from .series import Series, SeriesDetector
+from .locking import FileLock
+from .publishing import write_atomic
 
 SAVE_TIMEOUT = 30.0     # seconds to wait for OBS to report the saved replay file
 BUFFER_RETRY = 5.0      # seconds between replay-buffer start attempts while it is inactive
@@ -27,7 +32,7 @@ def _thread(fn):
 
 
 class Clipper:
-    def __init__(self, cfg: dict, buffer, log, cut=cut_clip, spawn=_thread, on_clip=None):
+    def __init__(self, cfg: dict, buffer, log, cut=cut_clip, spawn=_thread, on_clip=None, state_dir=None):
         self.buffer, self.log, self._cut, self._spawn, self.on_clip = buffer, log, cut, spawn, on_clip
         self.tracker = GsiTracker(cfg["count_assists"])
         self.detector = SeriesDetector(cfg["window"], cfg["tail_single"], cfg["tail_series"], cfg["pre"])
@@ -42,6 +47,72 @@ class Clipper:
         self._capture_enabled = False
         self.last_packet_ts: float | None = None
         self.last_clip: str | None = None
+        self.journal = Path(state_dir) / 'captures' if state_dir else None
+        if self.journal:
+            self.journal.mkdir(parents=True, exist_ok=True)
+            for path in self.journal.glob('*.json'):
+                record = json.loads(path.read_text(encoding='utf-8'))
+                if record['stage'] in ('cutting', 'ready'):
+                    self._spawn(lambda p=path: self._recover_cut(p))
+
+    def checkpoint(self):
+        """Persist OBS requests whose replay path has not arrived yet."""
+        if not self.journal:
+            return
+        jobs = list(self.pending)
+        if self.saving:
+            jobs.append(self.saving[0])
+        for series, folder, log in jobs:
+            key = hashlib.sha256(f'{folder}:{series.first}'.encode()).hexdigest()
+            path = self.journal / f'awaiting-{key}.json'
+            write_atomic(path, json.dumps({'stage': 'awaiting_replay', 'series': asdict(series),
+                'folder': str(folder), 'match_json': str(log.path) if log else None,
+                'requested_at': self.saving[1] if self.saving and self.saving[0][0] is series else None}))
+        if jobs:
+            self.log.warning('%d capture(s) awaiting an OBS replay file; see captures/awaiting-*.json', len(jobs))
+
+    def recover_replay(self, replay_path):
+        """Recover one late OBS save only when its timestamp matches a journaled request."""
+        if not self.journal or not replay_path:
+            return
+        src = Path(replay_path)
+        if not src.is_file():
+            return
+        saved_at = src.stat().st_mtime
+        matches = []
+        for path in self.journal.glob('awaiting-*.json'):
+            record = json.loads(path.read_text(encoding='utf-8'))
+            requested = record.get('requested_at')
+            if requested is not None and requested <= saved_at <= requested + SAVE_TIMEOUT:
+                matches.append(record)
+        if len(matches) == 1:
+            record = matches[0]
+            match = MatchLog(Path(record['match_json'])) if record['match_json'] else None
+            self._start_cut((Series(**record['series']), Path(record['folder']), match), src, saved_at)
+
+    def _recover_cut(self, path, match=None):
+        with FileLock(path.with_suffix('.lock')):
+            record = json.loads(path.read_text(encoding='utf-8'))
+            if record['stage'] == 'done':
+                return
+            if record['stage'] == 'cutting':
+                res = self._cut(record['ffmpeg'], Path(record['src']), Path(record['dst']),
+                    record['series']['first'] - record['series']['pre'],
+                    record['series']['last'] + record['series']['tail'], record['saved_at'], keep_source=True)
+                record.update(result=res, stage='ready' if res['ok'] else 'failed')
+                write_atomic(path, json.dumps(record))
+            res = record['result']
+            if match is None and record['match_json']:
+                match = MatchLog(Path(record['match_json']))
+            series = Series(**record['series'])
+            if match is not None:
+                match.update_clip(record['idx'], status='ok' if res['ok'] else 'error', path=res['path'],
+                    ffmpeg_start=res['start'], ffmpeg_end=res['end'], truncated=res['truncated'], error=res['error'])
+            if res['ok'] and self.on_clip:
+                self.on_clip(res['path'], series.kills, series.assists, series.kda, match, record['idx'])
+            record['stage'] = 'done' if res['ok'] else 'failed'
+            write_atomic(path, json.dumps(record))
+            self._results.put((match, record['idx'], series, {**res, 'handed_off': True}))
 
     # ---- inputs -------------------------------------------------------------------
     def update(self, cfg: dict) -> None:
@@ -111,6 +182,7 @@ class Clipper:
     def _queue(self, series: Series | None) -> None:
         if series is not None:
             self.pending.append((series, self.match_dir, self.match_log))
+            self.checkpoint()
             self.log.info("Series closed: %d kills, %d assists, clock %d..%d",
                           series.kills, series.assists, series.start_clock, series.end_clock)
 
@@ -126,6 +198,7 @@ class Clipper:
             return
         self.buffer.save()
         self.saving = (self.pending.popleft(), now)
+        self.checkpoint()
 
     def _start_cut(self, job: tuple, src: Path, saved_at: float) -> None:
         series, folder, log = job
@@ -138,6 +211,16 @@ class Clipper:
                                 "end_clock": series.end_clock, "kills": series.kills,
                                 "assists": series.assists, "status": "cutting"})
         ffmpeg = self.cfg["ffmpeg"]
+        if self.journal:
+            key = hashlib.sha256(str(dst).encode()).hexdigest()
+            path = self.journal / f'{key}.json'
+            write_atomic(path, json.dumps({'stage': 'cutting', 'src': str(src), 'dst': str(dst),
+                'ffmpeg': ffmpeg, 'saved_at': saved_at, 'series': asdict(series),
+                'match_json': str(log.path) if log else None, 'idx': idx}))
+            awaiting = hashlib.sha256(f'{folder}:{series.first}'.encode()).hexdigest()
+            (self.journal / f'awaiting-{awaiting}.json').unlink(missing_ok=True)
+            self._spawn(lambda: self._recover_cut(path, log))
+            return
 
         def work():
             try:
@@ -165,7 +248,7 @@ class Clipper:
                 log.update_clip(idx, status="ok" if res["ok"] else "error", path=res["path"],
                                 ffmpeg_start=res["start"], ffmpeg_end=res["end"],
                                 truncated=res["truncated"], error=res["error"])
-            if res["ok"] and self.on_clip:
+            if res["ok"] and self.on_clip and not res.get('handed_off'):
                 try:
                     self.on_clip(res["path"], series.kills, series.assists, series.kda, log, idx)
                 except Exception:

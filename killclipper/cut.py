@@ -48,7 +48,7 @@ def probe_duration(ffmpeg: str, src: Path, run=subprocess.run) -> float:
 
 
 def cut_clip(ffmpeg: str, src: Path, dst: Path, start_ts: float, end_ts: float,
-             saved_at: float, run=subprocess.run) -> dict:
+             saved_at: float, run=subprocess.run, keep_source: bool = False) -> dict:
     """Cut src -> dst. Success deletes src; failure moves src next to dst as <name>_raw.mp4."""
     src, dst = Path(src), Path(dst)
     res = {"ok": False, "path": str(dst), "start": None, "end": None, "duration": None,
@@ -62,10 +62,14 @@ def cut_clip(ffmpeg: str, src: Path, dst: Path, start_ts: float, end_ts: float,
                 creationflags=_NO_WINDOW)
         if r.returncode != 0:
             raise RuntimeError(f"ffmpeg exit {r.returncode}: {r.stderr.strip()}")
-        src.unlink()
+        if not keep_source:
+            src.unlink()
         res["ok"] = True
     except (OSError, RuntimeError, ValueError) as e:
         res["error"] = f"{type(e).__name__}: {e}"
+        if keep_source:
+            res['path'] = str(src)
+            return res
         raw = dst.with_name(dst.stem + "_raw.mp4")
         try:
             dst.unlink(missing_ok=True)
