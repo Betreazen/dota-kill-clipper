@@ -1,9 +1,10 @@
-"""Orchestration: GSI packets -> series -> replay-buffer save -> ffmpeg cut.
+"""Orchestration: GSI packets -> series -> replay-buffer save -> ffmpeg cut -> on_clip hand-off.
 
 No OBS imports. The OBS script passes a `buffer` object (active()/start()/save()),
 calls on_packet() for queued GSI packets, on_buffer_saved() from the OBS
 REPLAY_BUFFER_SAVED event and tick(now) every 100 ms, all on the OBS main thread.
-cut_clip runs in a worker thread (spawn); its result is applied on the next tick.
+cut_clip runs in a worker thread (spawn); its result is applied on the next tick, and every
+finished clip is handed to on_clip (the Shorts/YouTube pipeline).
 """
 import queue
 import threading
@@ -26,8 +27,8 @@ def _thread(fn):
 
 
 class Clipper:
-    def __init__(self, cfg: dict, buffer, log, cut=cut_clip, spawn=_thread):
-        self.buffer, self.log, self._cut, self._spawn = buffer, log, cut, spawn
+    def __init__(self, cfg: dict, buffer, log, cut=cut_clip, spawn=_thread, on_clip=None):
+        self.buffer, self.log, self._cut, self._spawn, self.on_clip = buffer, log, cut, spawn, on_clip
         self.tracker = GsiTracker(cfg["count_assists"])
         self.detector = SeriesDetector(cfg["window"], cfg["tail_single"], cfg["tail_series"], cfg["pre"])
         self.cfg = cfg
@@ -36,8 +37,9 @@ class Clipper:
         # a job is (series, match_dir, match_log) captured when the series closed
         self.pending: deque[tuple] = deque()             # jobs waiting for a buffer save
         self.saving: tuple[tuple, float] | None = None   # (job, requested_at)
-        self._results: queue.Queue = queue.Queue()       # (match_log, clip_idx, result)
+        self._results: queue.Queue = queue.Queue()       # (match_log, clip_idx, series, result)
         self._buffer_try_at = 0.0
+        self._capture_enabled = False
         self.last_packet_ts: float | None = None
         self.last_clip: str | None = None
 
@@ -56,7 +58,7 @@ class Clipper:
             if ev["type"] == "match":
                 self._queue(self.detector.flush())
                 self._open_match(ev)
-            else:
+            elif self._capture_enabled:
                 if self.match_log:
                     self.match_log.add_event(ev)
                 self._queue(self.detector.add(ev))
@@ -86,16 +88,24 @@ class Clipper:
 
     # ---- internals ----------------------------------------------------------------
     def _open_match(self, ev: dict) -> None:
+        wanted_hero = self.cfg.get("hero")
+        self._capture_enabled = not wanted_hero or ev["hero_name"] == wanted_hero
+        if not self._capture_enabled:
+            self.match_dir, self.match_log = None, None
+            self.log.info("Ignoring %s: only %s is configured", ev["hero_name"], wanted_hero)
+            return
         name = match_dir_name(datetime.fromtimestamp(ev["ts"]), ev["hero_name"], ev["match_id"])
-        self.match_dir = Path(self.cfg["root"]) / name
+        match_dir = Path(self.cfg["root"]) / name
+        self.match_dir = match_dir
         try:
-            self.match_dir.mkdir(parents=True, exist_ok=True)
-            self.match_log = MatchLog(self.match_dir / "match.json")
-            self.match_log.start(ev["match_id"], ev["hero_name"], ev["steamid"],
-                                 datetime.fromtimestamp(ev["ts"]).isoformat(timespec="seconds"))
-            self.log.info("Match folder: %s", self.match_dir)
+            match_dir.mkdir(parents=True, exist_ok=True)
+            match_log = MatchLog(match_dir / "match.json")
+            match_log.start(ev["match_id"], ev["hero_name"], ev["steamid"],
+                            datetime.fromtimestamp(ev["ts"]).isoformat(timespec="seconds"))
+            self.match_log = match_log
+            self.log.info("Match folder: %s", match_dir)
         except OSError as e:
-            self.log.error("Cannot create match folder %s: %s", self.match_dir, e)
+            self.log.error("Cannot create match folder %s: %s", match_dir, e)
             self.match_dir, self.match_log = None, None
 
     def _queue(self, series: Series | None) -> None:
@@ -130,15 +140,19 @@ class Clipper:
         ffmpeg = self.cfg["ffmpeg"]
 
         def work():
-            res = self._cut(ffmpeg, src, dst, series.start_ts, series.end_ts, saved_at)
-            self._results.put((log, idx, res))
+            try:
+                res = self._cut(ffmpeg, src, dst, series.start_ts, series.end_ts, saved_at)
+            except Exception as e:  # never leave a clip stuck in "cutting"
+                res = {"ok": False, "path": str(src), "start": None, "end": None, "duration": None,
+                       "truncated": False, "error": f"{type(e).__name__}: {e}"}
+            self._results.put((log, idx, series, res))
 
         self._spawn(work)
 
     def _apply_results(self) -> None:
         while True:
             try:
-                log, idx, res = self._results.get_nowait()
+                log, idx, series, res = self._results.get_nowait()
             except queue.Empty:
                 return
             if res["ok"]:
@@ -151,3 +165,8 @@ class Clipper:
                 log.update_clip(idx, status="ok" if res["ok"] else "error", path=res["path"],
                                 ffmpeg_start=res["start"], ffmpeg_end=res["end"],
                                 truncated=res["truncated"], error=res["error"])
+            if res["ok"] and self.on_clip:
+                try:
+                    self.on_clip(res["path"], series.kills, series.assists, series.kda, log, idx)
+                except Exception:
+                    self.log.exception("Shorts pipeline hand-off failed for %s", res["path"])

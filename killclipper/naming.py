@@ -1,5 +1,7 @@
 """Match folder names, clip names, match.json."""
 import json
+import os
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -43,10 +45,14 @@ def unique_path(path: Path) -> Path:
 
 
 class MatchLog:
-    """match.json next to the clips. Rewritten on every change (small file)."""
+    """match.json next to the clips. Rewritten on every change (small file).
+
+    Shared by the OBS main thread and the Shorts pipeline thread, hence the lock.
+    """
 
     def __init__(self, path: Path):
         self.path = Path(path)
+        self._lock = threading.RLock()
         self.data: dict = {"events": [], "clips": []}
         try:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
@@ -56,23 +62,30 @@ class MatchLog:
             pass
 
     def start(self, match_id: int, hero_name: str | None, steamid: str | None, started_at: str) -> None:
-        self.data.update(match_id=match_id, hero=hero_short(hero_name), steamid=steamid,
-                         started_at=started_at)
-        self.save()
+        with self._lock:
+            self.data.update(match_id=match_id, hero=hero_short(hero_name), steamid=steamid,
+                             started_at=started_at)
+            self.save()
 
     def add_event(self, ev: dict) -> None:
-        self.data["events"].append(ev)
-        self.save()
+        with self._lock:
+            self.data["events"].append(ev)
+            self.save()
 
     def add_clip(self, clip: dict) -> int:
-        self.data["clips"].append(clip)
-        self.save()
-        return len(self.data["clips"]) - 1
+        with self._lock:
+            self.data["clips"].append(clip)
+            self.save()
+            return len(self.data["clips"]) - 1
 
     def update_clip(self, idx: int, **fields) -> None:
-        self.data["clips"][idx].update(fields)
-        self.save()
+        with self._lock:
+            self.data["clips"][idx].update(fields)
+            self.save()
 
     def save(self) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self.data, ensure_ascii=False, indent=1), encoding="utf-8")
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=1), encoding="utf-8")
+            os.replace(tmp, self.path)  # a crash mid-write never truncates match.json

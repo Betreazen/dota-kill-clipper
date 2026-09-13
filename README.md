@@ -50,6 +50,18 @@ C:\Highlights\2026-09-09 21-35 pudge (match 8954164528)\
    при ошибке резки остаётся `<имя>_raw.mp4` в папке матча.
 5. `match.json` в папке матча: id, герой, steamid, время старта, все события и клипы со статусами.
 
+## Shorts и YouTube
+Для игр на Techies каждый готовый клип дополнительно монтируется в вертикальный Short 1080×1920 и публикуется на канале
+«Betreazen highlights Dota 2» по расписанию. Настройка Google и входа — в [docs/YOUTUBE.md](docs/YOUTUBE.md), правила — в `docs/PROJECT.md` §10.
+
+- Вертикальная версия кладётся в подпапку `shorts` папки матча, горизонтальный клип остаётся.
+- CTA сверху и снизу: файлы 1080×420 с прозрачностью (ProRes 4444 `.mov`, WebM VP9 с альфой, GIF, PNG).
+  Короче клипа — зациклятся, другой размер — впишутся в полосу по ширине.
+- Музыка: `python tools/fetch_music.py` скачивает ~150 энергичных треков Kevin MacLeod (CC BY 4.0) в `C:\Highlights\music`
+  и пишет `credits.json`; атрибуция трека попадает в описание видео.
+- Библиотеки Google для Python OBS: `%LOCALAPPDATA%\Python\pythoncore-3.12-64\python.exe -m pip install -r requirements-youtube.txt`.
+- Очередь, расписание и отчёты среза: `%LOCALAPPDATA%\dota-kill-clipper\` (`jobs.json`, `schedule.json`, `reports\`).
+
 ## Устранение неполадок
 | Симптом | Что проверить |
 |---|---|
@@ -59,17 +71,20 @@ C:\Highlights\2026-09-09 21-35 pudge (match 8954164528)\
 | `Replay buffer is not active` | Settings → Output → Recording → Replay Buffer включён; после смены настроек перезапусти OBS; скрипт пытается включить буфер сам каждые 5 с |
 | Клип `_raw.mp4` вместо нарезанного | ffmpeg/ffprobe не найдены или упали — путь в панели, подробности в логе |
 | Клип короче ожидаемого, в логе `TRUNCATED` | Бой длиннее буфера — увеличь длину буфера в OBS (по умолчанию скрипт ставит 120 с) |
+| В статусе `YouTube: not logged in` | Нажми «Log in to YouTube» и выбери канал Betreazen highlights Dota 2; токен другого канала отклоняется |
+| Видео на YouTube остаются приватными после даты публикации | Проект Google не прошёл аудит YouTube API — см. docs/YOUTUBE.md |
+| Short не появился, в логе `Render failed` | Путь к CTA или музыке, NVENC занят (скрипт сам пробует libx264); после 3 попыток задание помечается `failed` в `jobs.json` |
 | Клипы уходят не в ту папку / пустые папки | Папка матча создаётся при входе в игру (так задумано); демо и боты попадают в `… (demo)` |
 
 Лог: `%LOCALAPPDATA%\dota-kill-clipper\clipper.log` (ротация 1 МБ × 3) и Script Log в OBS.
 
 ## Разработка
 ```
-python -m pytest -q          # 73 теста, Python 3.14 (код совместим с 3.12)
+python -m pytest -q          # Python 3.14 (код совместим с 3.12)
 ```
 Структура: `obs_dota_kill_clipper.py` (обвязка OBS) · `killclipper/` (`gsi`, `series`, `naming`, `cut`,
-`dota_paths`, `clipper`) · `tests/` · `docs/` (спека, план, память задачи, сценарии).
-Зависимостей вне стандартной библиотеки нет. Правила для Claude Code — в [CLAUDE.md](CLAUDE.md).
+`dota_paths`, `clipper`, `render`, `publishing`, `youtube`, `pipeline`, `seo_dictionary.json`) · `tools/` · `tests/` · `docs/` (спека, план, память задачи, сценарии).
+Вне стандартной библиотеки — только библиотеки Google для YouTube (`requirements-youtube.txt`). Правила для Claude Code — в [CLAUDE.md](CLAUDE.md).
 
 ## Вне рамок
-Клипы смертей, командные убийства, оверлеи, загрузка в облако, Linux/macOS.
+Клипы смертей, командные убийства, оверлеи поверх игры, публикация куда-либо кроме YouTube, Linux/macOS.

@@ -8,3 +8,6 @@ __pycache__/
 graphify-out/
 # third-party Claude Code skills copied locally (licenses differ, not ours to publish)
 .claude/skills/
+# Google OAuth secrets and tokens never belong in the repo
+client_secret*.json
+*token*.json
