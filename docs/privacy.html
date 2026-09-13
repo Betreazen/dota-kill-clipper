@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy · Dota Kill Clipper</title>
+<style>
+  body { font: 16px/1.6 system-ui, "Segoe UI", Arial, sans-serif; max-width: 760px; margin: 40px auto; padding: 0 20px; color: #1f2328; }
+  h2 { margin-top: 28px; }
+  nav a, footer a { margin-right: 18px; }
+  code { background: #f6f8fa; padding: 1px 5px; border-radius: 4px; }
+  footer { margin-top: 40px; padding-top: 16px; border-top: 1px solid #d0d7de; font-size: 14px; color: #57606a; }
+</style>
+</head>
+<body>
+<nav><a href="./">Home</a><a href="privacy.html">Privacy Policy</a><a href="terms.html">Terms of Service</a></nav>
+
+<h1>Privacy Policy</h1>
+<p>Effective date: September 13, 2026</p>
+
+<p>Dota Kill Clipper ("the script") is a free, open-source OBS Studio script that runs only on your own Windows computer.
+It records highlight clips of your own Dota 2 games and can publish them to your own YouTube channel.
+The developer operates no servers and does not receive any of your data.</p>
+
+<h2>1. YouTube API Services</h2>
+<p>The script uses YouTube API Services. By connecting a YouTube channel to the script you agree to be bound by the
+<a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>. Your data at Google is handled under the
+<a href="http://www.google.com/policies/privacy">Google Privacy Policy</a>.</p>
+
+<h2>2. Information the script accesses</h2>
+<p>Only after you press "Log in to YouTube" and grant access, the script accesses:</p>
+<ul>
+  <li>the OAuth access token and refresh token issued by Google for your account;</li>
+  <li>the ID and title of the authorized channel, to confirm it is the channel configured in the script;</li>
+  <li>the list of videos uploaded to that channel with their privacy status, publish date and view count;</li>
+  <li>the titles and IDs of that channel's playlists.</li>
+</ul>
+<p>The script does not access comments, subscribers, messages, payment data, or data of any other channel or user.</p>
+
+<h2>3. How the information is used</h2>
+<ul>
+  <li>To upload clips you recorded, with a title, description, tags and a scheduled publish time.</li>
+  <li>To create playlists on your channel and add your videos to them.</li>
+  <li>Once a month, to compare the view counts of your own public videos older than 30 days and change clearly
+    underperforming videos to "unlisted". The script never deletes videos.</li>
+</ul>
+<p>The information is not used for advertising, profiling, or any other purpose, and it is never sold.</p>
+
+<h2>4. Storage and retention</h2>
+<p>All data stays on your computer in <code>%LOCALAPPDATA%\dota-kill-clipper</code>:</p>
+<ul>
+  <li><code>youtube-token.json</code>: your OAuth token;</li>
+  <li><code>jobs.json</code> and <code>schedule.json</code>: the upload queue with the IDs of videos the script uploaded and the reserved publish times;</li>
+  <li><code>reports\review-YYYY-MM.json</code>: monthly reports with video IDs and view counts. Reports older than 36 months are deleted automatically;</li>
+  <li><code>clipper.log</code>: a local log file.</li>
+</ul>
+<p>The script re-checks the authorization of your channel at least once a month. You can delete the folder at any time to remove all stored data.</p>
+
+<h2>5. Sharing</h2>
+<p>The script does not share your information with any third party. Data is sent only to Google and YouTube through
+the YouTube API, when the script performs the actions described above.</p>
+
+<h2>6. Cookies and device information</h2>
+<p>The script places no cookies and uses no analytics or tracking. It only stores the local files listed in section 4 on your device.</p>
+
+<h2>7. Revoking access</h2>
+<p>You can revoke the script's access to your data at any time on the
+<a href="https://security.google.com/settings/security/permissions">Google security settings page</a>.
+You can also delete <code>youtube-token.json</code> from the folder above.</p>
+
+<h2>8. Contact</h2>
+<p>Questions or complaints: open an issue at
+<a href="https://github.com/Betreazen/dota-kill-clipper/issues">github.com/Betreazen/dota-kill-clipper/issues</a>.</p>
+
+<h2>9. Changes</h2>
+<p>Changes to this policy are published on this page with a new effective date.</p>
+
+<footer><a href="./">Home</a><a href="terms.html">Terms of Service</a></footer>
+</body>
+</html>

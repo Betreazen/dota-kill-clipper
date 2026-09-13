@@ -194,10 +194,15 @@ def test_render_failure_keeps_horizontal_clip_and_gives_up_after_three_attempts(
 
 def test_monthly_review_runs_once_per_month_and_writes_report(tmp_path):
     yt = FakeYoutube()
+    reports = tmp_path / "state" / "reports"
+    reports.mkdir(parents=True)
+    (reports / "review-2023-01.json").write_text("{}")  # older than 36 months: removed
+    (reports / "review-2024-01.json").write_text("{}")  # kept
     p, _ = make(tmp_path, yt)
     run_all(p)
     assert yt.unlisted == ["weak"]
-    report = json.loads((tmp_path / "state" / "reports" / "review-2026-09.json").read_text(encoding="utf-8"))
+    assert sorted(x.name for x in reports.iterdir()) == ["review-2024-01.json", "review-2026-09.json"]
+    report = json.loads((reports / "review-2026-09.json").read_text(encoding="utf-8"))
     assert report["hide"] == ["weak"] and report["median"] == 50 and report["hidden_as"] == "unlisted"
     again, _ = make(tmp_path, yt)
     run_all(again)
