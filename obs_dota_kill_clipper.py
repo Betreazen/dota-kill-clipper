@@ -1,8 +1,9 @@
-"""OBS Studio script: auto-save Dota 2 kill/assist clips from the replay buffer.
+"""OBS Studio script: auto-save Dota 2 kill/assist clips from the replay buffer, render Shorts, publish to YouTube.
 
 Add in OBS: Tools -> Scripts (Python 3.12). All obspython calls happen on the OBS
 main thread: the GSI HTTP server runs in a background thread and only fills a queue,
-which the 100 ms timer drains. Logic lives in the killclipper package next to this file.
+which the 100 ms timer drains. Rendering and uploads run in one pipeline worker thread.
+Logic lives in the killclipper package next to this file.
 """
 import logging
 import logging.handlers
@@ -19,18 +20,26 @@ from killclipper.clipper import Clipper  # noqa: E402
 from killclipper.cut import find_ffmpeg  # noqa: E402
 from killclipper.dota_paths import install_cfg  # noqa: E402
 from killclipper.gsi import GsiServer  # noqa: E402
+from killclipper.pipeline import Pipeline  # noqa: E402
+from killclipper.youtube import YoutubeClient  # noqa: E402
 
 DATA_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "dota-kill-clipper")
 TOKEN_FILE = os.path.join(DATA_DIR, "token.txt")
 LOG_FILE = os.path.join(DATA_DIR, "clipper.log")
+YOUTUBE_TOKEN = os.path.join(DATA_DIR, "youtube-token.json")
+CHANNEL_NAME = "Betreazen highlights Dota 2"
+HERO = "npc_dota_hero_techies"
 DEFAULTS = {"root": r"C:\Highlights", "port": 3220, "window": 15, "tail_single": 10,
-            "tail_series": 15, "pre": 10, "ffmpeg": r"C:\ffmpeg\bin\ffmpeg.exe", "count_assists": True}
+            "tail_series": 15, "pre": 10, "ffmpeg": r"C:\ffmpeg\bin\ffmpeg.exe", "count_assists": True,
+            "vertical_enabled": True, "upper_cta": "", "lower_cta": "", "music_dir": r"C:\Highlights\music",
+            "music_volume": 15, "youtube_enabled": False, "youtube_credentials": ""}
 BUFFER_SECONDS, BUFFER_MB = 120, 2048
 TICK_MS = 100
 
 log = logging.getLogger("killclipper")
 server: GsiServer | None = None
 clipper: Clipper | None = None
+pipeline: Pipeline | None = None
 buffer_start_at: float | None = None  # deferred replay-buffer start (after OBS finished loading)
 
 
@@ -151,6 +160,22 @@ def install_gsi_cfg(props, prop):
     return True
 
 
+# ---- YouTube --------------------------------------------------------------------------
+def make_youtube(cfg):
+    return YoutubeClient(cfg["youtube_credentials"], YOUTUBE_TOKEN) if cfg["youtube_credentials"] else None
+
+
+def youtube_login(props, prop):
+    if not pipeline:
+        return False
+    if not pipeline.youtube:
+        log.error("YouTube: choose the Google OAuth client JSON first")
+        return False
+    log.info("YouTube: opening the browser, pick the %s channel", CHANNEL_NAME)
+    pipeline.request_login()
+    return True
+
+
 # ---- tick ----------------------------------------------------------------------------
 def tick():
     global buffer_start_at
@@ -173,8 +198,8 @@ current = dict(DEFAULTS)
 
 
 def script_description():
-    return ("<b>Dota Kill Clipper</b><br>Saves clips of your kills/assists from the replay buffer "
-            "into per-match folders. Needs Dota 2 GSI config (button below) and ffmpeg.")
+    return ("<b>Dota Kill Clipper</b><br>Saves clips of your Techies kills/assists from the replay buffer "
+            "into per-match folders, renders vertical Shorts and schedules them on YouTube.")
 
 
 def script_defaults(settings):
@@ -197,6 +222,17 @@ def read_settings(settings):
         "pre": obs.obs_data_get_int(settings, "pre"),
         "ffmpeg": find_ffmpeg(obs.obs_data_get_string(settings, "ffmpeg")) or DEFAULTS["ffmpeg"],
         "count_assists": obs.obs_data_get_bool(settings, "count_assists"),
+        "hero": HERO,
+        "channel": CHANNEL_NAME,
+        "vertical": {
+            "enabled": obs.obs_data_get_bool(settings, "vertical_enabled"),
+            "upper_cta": obs.obs_data_get_string(settings, "upper_cta"),
+            "lower_cta": obs.obs_data_get_string(settings, "lower_cta"),
+            "music_dir": obs.obs_data_get_string(settings, "music_dir"),
+            "music_volume": obs.obs_data_get_int(settings, "music_volume") / 100,
+        },
+        "youtube_enabled": obs.obs_data_get_bool(settings, "youtube_enabled"),
+        "youtube_credentials": obs.obs_data_get_string(settings, "youtube_credentials"),
     }
 
 
@@ -210,6 +246,17 @@ def script_properties():
     obs.obs_properties_add_int(p, "window", "Series window (s)", 1, 60, 1)
     obs.obs_properties_add_path(p, "ffmpeg", "ffmpeg.exe", obs.OBS_PATH_FILE, "ffmpeg (*.exe)", None)
     obs.obs_properties_add_bool(p, "count_assists", "Count assists as events")
+    obs.obs_properties_add_bool(p, "vertical_enabled", "Render vertical 1080x1920 Short (shorts subfolder)")
+    obs.obs_properties_add_path(p, "upper_cta", "Top CTA, 1080x420 with alpha", obs.OBS_PATH_FILE,
+                                "Video (*.mov *.webm *.gif *.png *.mp4)", None)
+    obs.obs_properties_add_path(p, "lower_cta", "Bottom CTA, 1080x420 with alpha", obs.OBS_PATH_FILE,
+                                "Video (*.mov *.webm *.gif *.png *.mp4)", None)
+    obs.obs_properties_add_path(p, "music_dir", "Music folder (Kevin MacLeod)", obs.OBS_PATH_DIRECTORY, "", None)
+    obs.obs_properties_add_int(p, "music_volume", "Music volume (%)", 0, 100, 1)
+    obs.obs_properties_add_bool(p, "youtube_enabled", f"Upload Shorts to YouTube ({CHANNEL_NAME})")
+    obs.obs_properties_add_path(p, "youtube_credentials", "Google OAuth client JSON", obs.OBS_PATH_FILE,
+                                "JSON (*.json)", None)
+    obs.obs_properties_add_button(p, "youtube_login", "Log in to YouTube", youtube_login)
     obs.obs_properties_add_button(p, "install", "Install GSI config into Dota 2", install_gsi_cfg)
     obs.obs_properties_add_text(p, "status", status_text(), obs.OBS_TEXT_INFO)
     obs.obs_properties_add_button(p, "refresh", "Refresh status", lambda props, prop: True)
@@ -225,26 +272,34 @@ def status_text():
     if not server:
         gsi = "server NOT running (port busy?)"
     buf = "active" if obs.obs_frontend_replay_buffer_active() else "NOT active"
+    shorts = pipeline.status() if pipeline else "-"
     return (f"GSI: {gsi} | Replay buffer: {buf} | Last clip: {clipper.last_clip or '-'} | "
-            f"Log: {LOG_FILE}")
+            f"{shorts} | Log: {LOG_FILE}")
 
 
 def script_update(settings):
     global current
     new = read_settings(settings)
     port_changed = new["port"] != current["port"]
+    credentials_changed = new["youtube_credentials"] != current["youtube_credentials"]
     current = new
     if clipper:
         clipper.update(current)
+    if pipeline:
+        pipeline.cfg = current
+        if credentials_changed:
+            pipeline.youtube = make_youtube(current)
     if clipper and (port_changed or server is None):
         start_server(current["port"])
 
 
 def script_load(settings):
-    global clipper, buffer_start_at
+    global clipper, pipeline, buffer_start_at
     setup_logging()
     current.update(read_settings(settings))
-    clipper = Clipper(current, ObsBuffer(), log)
+    pipeline = Pipeline(current, DATA_DIR, log, youtube=make_youtube(current))
+    pipeline.start()
+    clipper = Clipper(current, ObsBuffer(), log, on_clip=pipeline.submit)
     os.makedirs(current["root"], exist_ok=True)
     log.info("Loaded (python %s). Clips -> %s, ffmpeg: %s", sys.version.split()[0], current["root"], current["ffmpeg"])
     ensure_buffer_config()
@@ -255,11 +310,14 @@ def script_load(settings):
 
 
 def script_unload():
-    global clipper
+    global clipper, pipeline
     obs.timer_remove(tick)
     obs.obs_frontend_remove_event_callback(on_frontend_event)
     stop_server()
     if clipper:
         clipper.flush(time.time())
         clipper = None
+    if pipeline:
+        pipeline.stop()
+        pipeline = None
     log.info("Unloaded")

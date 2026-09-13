@@ -65,6 +65,7 @@ def script(tmp_path, monkeypatch):
     mod.script_defaults(settings)
     settings["root"] = str(tmp_path / "Highlights")
     settings["port"] = 0
+    settings["vertical_enabled"] = False  # no real ffmpeg render in this smoke test
     mod.script_load(settings)
     yield mod, obs, settings
     mod.script_unload()
@@ -100,13 +101,13 @@ def test_tick_starts_buffer_and_processes_gsi_packets(script, tmp_path):
             time.sleep(0.01)
         mod.tick()
 
-    send(packet(kills=0, clock=100))
-    assert [d.name for d in (tmp_path / "Highlights").iterdir()][0].endswith("pudge (match 8954164528)")
+    send(packet(kills=0, clock=100, hero="npc_dota_hero_techies"))
+    assert [d.name for d in (tmp_path / "Highlights").iterdir()][0].endswith("techies (match 8954164528)")
     cut_calls = []
-    mod.clipper._cut = lambda *a: (cut_calls.append(a), {"ok": True, "path": str(a[2]), "start": 1.0, "end": 21.0,
+    mod.clipper._cut = lambda *a, **kw: (cut_calls.append(a), {"ok": True, "path": str(a[2]), "start": 1.0, "end": 21.0,
                                                           "duration": 60.0, "truncated": False, "error": None})[1]
     mod.clipper._spawn = lambda fn: fn()
-    send(packet(kills=1, clock=101))
+    send(packet(kills=1, clock=101, hero="npc_dota_hero_techies"))
     assert mod.clipper.detector.current is not None
     mod.clipper.detector.current.last -= 20  # fast-forward: series older than the window
     mod.tick()

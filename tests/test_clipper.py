@@ -43,7 +43,7 @@ def env(tmp_path):
     buf = FakeBuffer()
     cut = fake_cut()
     cfg = dict(root=tmp_path / "Highlights", window=15, tail_single=10, tail_series=15, pre=10,
-               count_assists=True, ffmpeg="ffmpeg.exe")
+               count_assists=True, ffmpeg="ffmpeg.exe", hero="npc_dota_hero_pudge")
     c = Clipper(cfg, buffer=buf, log=logging.getLogger("test"), cut=cut, spawn=lambda fn: fn())
     return c, buf, cut, tmp_path / "Highlights"
 
@@ -202,7 +202,7 @@ def test_unload_flush_saves_pending(env):
 def test_config_update_changes_detector_and_root(env, tmp_path):
     c, buf, cut, root = env
     c.update(dict(root=tmp_path / "Other", window=5, tail_single=3, tail_series=4, pre=2,
-                  count_assists=False, ffmpeg="x.exe"))
+                  count_assists=False, ffmpeg="x.exe", hero="npc_dota_hero_pudge"))
     c.on_packet(1000.0, packet(kills=0, assists=0, clock=100))
     assert c.on_packet(1001.0, packet(kills=0, assists=1, clock=101)) == []
     c.on_packet(1002.0, packet(kills=1, assists=1, clock=102))
@@ -213,3 +213,51 @@ def test_config_update_changes_detector_and_root(env, tmp_path):
     assert cut.calls[0]["dst"].parent.parent == tmp_path / "Other"
     assert cut.calls[0]["dst"].name == "[00.01.40-00.01.45] 1 kill (KDA 1-0-1).mp4"
     assert cut.calls[0]["ffmpeg"] == "x.exe"
+
+
+def test_other_hero_is_ignored(tmp_path):
+    buf, cut = FakeBuffer(), fake_cut()
+    cfg = dict(root=tmp_path, window=15, tail_single=10, tail_series=15, pre=10,
+               count_assists=True, ffmpeg="ffmpeg.exe", hero="npc_dota_hero_techies")
+    c = Clipper(cfg, buffer=buf, log=logging.getLogger("test"), cut=cut, spawn=lambda fn: fn())
+    c.on_packet(1000.0, packet(hero="npc_dota_hero_pudge", kills=0))
+    c.on_packet(1001.0, packet(hero="npc_dota_hero_pudge", kills=1))
+    c.tick(1030.0)
+    assert not list(tmp_path.iterdir()) and not buf.saves and not cut.calls
+
+
+def test_finished_clip_is_handed_to_pipeline(tmp_path):
+    handed = []
+    buf, cut = FakeBuffer(), fake_cut()
+    cfg = dict(root=tmp_path, window=15, tail_single=10, tail_series=15, pre=10,
+               count_assists=True, ffmpeg="ffmpeg.exe")
+    c = Clipper(cfg, buf, logging.getLogger("test"), cut=cut, spawn=lambda fn: fn(),
+                on_clip=lambda *args: handed.append(args))
+    c.on_packet(1000, packet(kills=0))
+    c.on_packet(1001, packet(kills=1, assists=1))
+    c.tick(1016)
+    c.on_buffer_saved("r.mp4", 1017)
+    c.tick(1017)
+    path, kills, assists, kda, log, idx = handed[0]
+    assert path == str(cut.calls[0]["dst"]) and (kills, assists, kda) == (1, 1, (1, 0, 1))
+    assert log.data["clips"][idx]["status"] == "ok"
+
+
+def test_cut_crash_is_recorded_not_stuck_and_not_handed_off(tmp_path, caplog):
+    handed = []
+
+    def crashing_cut(*args, **kwargs):
+        raise TypeError("'dict' object is not callable")
+
+    cfg = dict(root=tmp_path, window=15, tail_single=10, tail_series=15, pre=10,
+               count_assists=True, ffmpeg="ffmpeg.exe")
+    c = Clipper(cfg, FakeBuffer(), logging.getLogger("test"), cut=crashing_cut, spawn=lambda fn: fn(),
+                on_clip=lambda *args: handed.append(args))
+    c.on_packet(1000, packet(kills=0))
+    c.on_packet(1001, packet(kills=1))
+    c.tick(1016)
+    c.on_buffer_saved("r.mp4", 1017)
+    with caplog.at_level(logging.ERROR, logger="test"):
+        c.tick(1017)
+    clip = c.match_log.data["clips"][0]
+    assert clip["status"] == "error" and "TypeError" in clip["error"] and not handed
