@@ -8,7 +8,7 @@
 последнего» (для серии хвост 15 с), минимум 20 с. Клипы раскладываются по папкам матчей:
 
 ```
-C:\Highlights\2026-09-09 21-35 pudge (match 8954164528)\
+E:\Highlights\2026-09-09 21-35 pudge (match 8954164528)\
     [00.23.27-00.23.47] 1 kill (KDA 3-1-2).mp4
     [00.30.52-00.31.43] 2 kills + 1 assist (KDA 6-1-4).mp4
     match.json
@@ -23,7 +23,7 @@ C:\Highlights\2026-09-09 21-35 pudge (match 8954164528)\
 
 ## Установка
 1. Склонируй репозиторий в любую папку без кириллицы в пути (например `C:\tools\dota-kill-clipper`).
-2. `powershell -ExecutionPolicy Bypass -File install.ps1` — создаст `C:\Highlights`, поставит GSI-конфиг
+2. `powershell -ExecutionPolicy Bypass -File install.ps1` — создаст `E:\Highlights`, поставит GSI-конфиг
    `gamestate_integration_killclipper.cfg` в Dota (порт 3220, токен в `%LOCALAPPDATA%\dota-kill-clipper\token.txt`).
    Тот же конфиг ставит кнопка «Install GSI config into Dota 2» в панели скрипта.
 3. OBS → Tools → Scripts → вкладка Python Settings → путь `%LOCALAPPDATA%\Python\pythoncore-3.12-64`.
@@ -57,7 +57,7 @@ C:\Highlights\2026-09-09 21-35 pudge (match 8954164528)\
 - Вертикальная версия кладётся в подпапку `shorts` папки матча, горизонтальный клип остаётся.
 - CTA сверху и снизу: файлы 1080×420 с прозрачностью (ProRes 4444 `.mov`, WebM VP9 с альфой, GIF, PNG).
   Короче клипа — зациклятся, другой размер — впишутся в полосу по ширине.
-- Музыка: `python tools/fetch_music.py` скачивает ~150 энергичных треков Kevin MacLeod (CC BY 4.0) в `C:\Highlights\music`
+- Музыка: `python tools/fetch_music.py` скачивает ~150 энергичных треков Kevin MacLeod (CC BY 4.0) в `E:\Highlights\music`
   и пишет `credits.json`; атрибуция трека попадает в описание видео.
 - Библиотеки Google для Python OBS: `%LOCALAPPDATA%\Python\pythoncore-3.12-64\python.exe -m pip install -r requirements-youtube.txt`.
 - Очередь, расписание и отчёты среза: `%LOCALAPPDATA%\dota-kill-clipper\` (`jobs.json`, `schedule.json`, `reports\`).

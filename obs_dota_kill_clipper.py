@@ -19,6 +19,7 @@ for _name in [m for m in sys.modules if m == "killclipper" or m.startswith("kill
 
 import obspython as obs  # noqa: E402
 
+from killclipper import DEFAULT_ROOT  # noqa: E402
 from killclipper.clipper import Clipper  # noqa: E402
 from killclipper.cut import find_ffmpeg  # noqa: E402
 from killclipper.dota_paths import install_cfg  # noqa: E402
@@ -32,9 +33,9 @@ LOG_FILE = os.path.join(DATA_DIR, "clipper.log")
 YOUTUBE_TOKEN = os.path.join(DATA_DIR, "youtube-token.json")
 CHANNEL_NAME = "Betreazen highlights Dota 2"
 HERO = "npc_dota_hero_techies"
-DEFAULTS = {"root": r"C:\Highlights", "port": 3220, "window": 15, "tail_single": 10,
+DEFAULTS = {"root": DEFAULT_ROOT, "port": 3220, "window": 15, "tail_single": 10,
             "tail_series": 15, "pre": 10, "ffmpeg": r"C:\ffmpeg\bin\ffmpeg.exe", "count_assists": True,
-            "vertical_enabled": True, "upper_cta": "", "lower_cta": "", "music_dir": r"C:\Highlights\music",
+            "vertical_enabled": True, "upper_cta": "", "lower_cta": "", "music_dir": DEFAULT_ROOT + r"\music",
             "music_volume": 15, "youtube_enabled": False, "youtube_credentials": ""}
 BUFFER_SECONDS, BUFFER_MB = 120, 2048
 TICK_MS = 100

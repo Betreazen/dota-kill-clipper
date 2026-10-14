@@ -14,7 +14,7 @@ ID канала из токена с ID этого handle; токен друго
    Экран «Google hasn't verified this app» для личного использования пропускается: Advanced → Go to Dota Kill Clipper.
    Сайт и политика конфиденциальности проекта: https://betreazen.github.io/dota-kill-clipper/ (GitHub Pages из папки `docs`).
 3. Credentials → Create credentials → OAuth client ID → тип **Desktop app** → скачать JSON.
-   Хранить вне репозитория (например `C:\Highlights\json-login\`). Путь указать в панели скрипта: «Google OAuth client JSON».
+   Хранить вне репозитория (например `E:\Highlights\json-login\`). Путь указать в панели скрипта: «Google OAuth client JSON».
 4. Библиотеки для Python OBS:
    `%LOCALAPPDATA%\Python\pythoncore-3.12-64\python.exe -m pip install -r requirements-youtube.txt`.
 
@@ -32,8 +32,8 @@ ID канала из токена с ID этого handle; токен друго
 
 Проверка без OBS (из папки проекта, Python 3.12):
 ```
-python -m killclipper.youtube login  "C:\Highlights\json-login\client_secret_….json"
-python -m killclipper.youtube review "C:\Highlights\json-login\client_secret_….json"   # только печатает отчёт среза
+python -m killclipper.youtube login  "E:\Highlights\json-login\client_secret_….json"
+python -m killclipper.youtube review "E:\Highlights\json-login\client_secret_….json"   # только печатает отчёт среза
 ```
 
 ## 4. Как публикуется видео
@@ -42,7 +42,7 @@ python -m killclipper.youtube review "C:\Highlights\json-login\client_secret_…
    в ближайший свободный слот 08:00, 10:00 … 22:00 (Europe/Minsk, не ближе 15 минут). Занятые слоты — в `schedule.json`.
 3. Видео добавляется в плейлист «Dota 2» и, если есть убийства, в «N kill video». Плейлисты создаются сами, публичные, с описанием.
 Описания плейлистов SEO-шные (RU + EN, ключевые слова, хештеги). Обновить их на канале после правки словаря:
-   `python -m killclipper.youtube playlists "C:\Highlights\json-login\client_secret_….json"`.
+   `python -m killclipper.youtube playlists "E:\Highlights\json-login\client_secret_….json"`.
 4. Ошибка загрузки (сеть, квота) → повтор с паузой до 1 часа, до 10 попыток; слот освобождается. Без входа задания ждут.
 
 ## 5. Ежемесячный срез

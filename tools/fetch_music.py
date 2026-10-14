@@ -11,6 +11,10 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from killclipper import DEFAULT_ROOT  # noqa: E402
+
+MUSIC_DIR = DEFAULT_ROOT + r"\music"
 CATALOG = "https://incompetech.com/music/royalty-free/pieces.json"
 MP3_URL = "https://incompetech.com/music/royalty-free/mp3-royaltyfree/"
 WANTED = {"Action", "Driving", "Intense", "Epic", "Aggressive", "Humorous", "Bouncy"}
@@ -36,7 +40,7 @@ def pick(pieces: list[dict], count: int) -> list[dict]:
     return [p for _, _, p in sorted(scored, key=lambda x: x[:2])[:count]]
 
 
-def main(target: str = r"C:\Highlights\music", count: int = 150) -> None:
+def main(target: str = MUSIC_DIR, count: int = 150) -> None:
     folder = Path(target)
     folder.mkdir(parents=True, exist_ok=True)
     with urllib.request.urlopen(CATALOG, timeout=60) as r:
@@ -66,5 +70,5 @@ def main(target: str = r"C:\Highlights\music", count: int = 150) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else r"C:\Highlights\music",
+    main(sys.argv[1] if len(sys.argv) > 1 else MUSIC_DIR,
          int(sys.argv[2]) if len(sys.argv) > 2 else 150)

@@ -24,6 +24,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+from killclipper import DEFAULT_ROOT  # noqa: E402
 
 DATA = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "dota-kill-clipper"
 OBS = Path(os.environ.get("APPDATA", Path.home())) / "obs-studio"
@@ -88,12 +89,16 @@ def _():
     return "OK", f"{SETTINGS['_path']}; " + ", ".join(f"{k}={SETTINGS.get(k, 'default')}" for k in keys)
 
 
-@check("OBS replay buffer profile")
-def _():
+def obs_profile() -> tuple[configparser.ConfigParser, str]:
     ini = glob.glob(str(OBS / "basic" / "profiles" / "*" / "basic.ini"))[0]
     cp = configparser.ConfigParser(strict=False, interpolation=None)
     cp.read(ini, encoding="utf-8-sig")
-    section = "AdvOut" if cp.get("Output", "Mode", fallback="") == "Advanced" else "SimpleOutput"
+    return cp, "AdvOut" if cp.get("Output", "Mode", fallback="") == "Advanced" else "SimpleOutput"
+
+
+@check("OBS replay buffer profile")
+def _():
+    cp, section = obs_profile()
     rb, t, size = cp.get(section, "RecRB", fallback="false"), cp.getint(section, "RecRBTime", fallback=0), \
         cp.getint(section, "RecRBSize", fallback=0)
     ok = rb == "true" and t >= 120 and size >= 2048
@@ -154,7 +159,7 @@ def _():
 @check("Music library")
 def _():
     from killclipper.render import AUDIO_SUFFIXES
-    folder = Path(SETTINGS.get("music_dir") or r"C:\Highlights\music")
+    folder = Path(SETTINGS.get("music_dir") or DEFAULT_ROOT + r"\music")
     tracks = [p for p in folder.iterdir() if p.suffix.lower() in AUDIO_SUFFIXES]
     credits = json.loads((folder / "credits.json").read_text(encoding="utf-8")) if (folder / "credits.json").exists() else {}
     missing = [p.name for p in tracks if p.name not in credits]
@@ -200,9 +205,11 @@ def _():
 
 @check("Disk space")
 def _():
-    root = SETTINGS.get("root") or r"C:\Highlights"
+    root = SETTINGS.get("root") or DEFAULT_ROOT
+    cp, section = obs_profile()
+    recordings = cp.get(section, "RecFilePath" if section == "AdvOut" else "FilePath", fallback="D:\\")
     parts, status = [], "OK"
-    for label, path in (("clips", root), ("OBS recordings", "D:\\")):
+    for label, path in (("clips", root), ("OBS recordings", recordings)):  # disk_usage follows junctions
         if not Path(path).exists():
             continue
         free = shutil.disk_usage(path).free / 2**30

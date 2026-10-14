@@ -85,6 +85,17 @@ def test_reloading_the_script_in_obs_picks_up_new_package_code(monkeypatch):
     sys.modules.pop("obs_dota_kill_clipper", None)
 
 
+def test_default_clip_and_music_folders_come_from_one_hdd_root(monkeypatch):
+    monkeypatch.setitem(sys.modules, "obspython", make_obs_stub())
+    sys.modules.pop("obs_dota_kill_clipper", None)
+    mod = importlib.import_module("obs_dota_kill_clipper")
+    from killclipper import DEFAULT_ROOT
+    assert DEFAULT_ROOT == r"E:\Highlights"
+    assert mod.DEFAULTS["root"] == DEFAULT_ROOT
+    assert mod.DEFAULTS["music_dir"] == DEFAULT_ROOT + r"\music"
+    sys.modules.pop("obs_dota_kill_clipper", None)
+
+
 def test_load_sets_up_timer_callbacks_server_and_buffer_config(script, tmp_path):
     mod, obs, settings = script
     assert obs.timers and obs.timers[0][1] == 100 and obs.callbacks == [mod.on_frontend_event]

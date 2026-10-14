@@ -1,7 +1,7 @@
 ﻿# install.ps1 — подготовка dota-kill-clipper: папка клипов, GSI-конфиг Dota 2, подсказки для OBS.
-# Запуск: powershell -ExecutionPolicy Bypass -File install.ps1 [-Root C:\Highlights] [-Port 3220]
+# Запуск: powershell -ExecutionPolicy Bypass -File install.ps1 [-Root E:\Highlights] [-Port 3220]
 param(
-    [string]$Root = "C:\Highlights",
+    [string]$Root = "E:\Highlights",
     [int]$Port = 3220
 )
 $ErrorActionPreference = "Stop"
