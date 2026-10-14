@@ -207,11 +207,11 @@ class Schedule:
                     return slot
             day += timedelta(days=1)
 
-    def release(self, slot: datetime) -> None:
+    def release(self, slot: datetime, now: datetime | None = None) -> None:
         with FileLock(self.path.with_suffix('.lock')):
             self.used = self._read()
             self.used.discard(slot.astimezone(self.zone).isoformat())
-            self._save(datetime.now(self.zone))
+            self._save(now or datetime.now(self.zone))
 
     def _save(self, now: datetime) -> None:
         # past slots are dropped so the file stays small
