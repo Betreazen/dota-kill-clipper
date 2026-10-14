@@ -284,7 +284,8 @@ class Pipeline:
                     self.log.warning("Upload result unknown for %s; checking the channel in %d min before retrying: %s",
                                      path.name, RECONCILE_DELAY // 60, error)
                     return
-                self.schedule.release(slot)  # YouTube refused the request, so nothing was uploaded
+                # YouTube refused the request, so nothing was uploaded
+                self.schedule.release(slot, datetime.fromtimestamp(now, self.schedule.zone))
                 job.update(stage="upload", publish_at=None, error=error)
                 if kind == "rejected":
                     job["stage"] = "failed"
@@ -343,7 +344,8 @@ class Pipeline:
             job["next_try"] = now + RECONCILE_DELAY
             return
         if job["publish_at"]:
-            self.schedule.release(datetime.fromisoformat(job["publish_at"]))
+            self.schedule.release(datetime.fromisoformat(job["publish_at"]),
+                                  datetime.fromtimestamp(now, self.schedule.zone))
         job.update(stage="upload", publish_at=None, checks=0, next_try=0,
                    error="Not found on the channel after an unknown upload result; uploading again")
         self.log.warning("YouTube: %s is not on the channel after %d checks, uploading it again",
@@ -356,7 +358,7 @@ class Pipeline:
         for slot in sorted(self.schedule._read()):
             when = datetime.fromisoformat(slot)
             if slot not in owned and when > current:
-                self.schedule.release(when)
+                self.schedule.release(when, current)
                 self.log.warning("Released publication slot %s that no queued video owns", slot)
 
     def _file_missing(self, job: dict, path: Path) -> None:

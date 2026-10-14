@@ -157,6 +157,14 @@ def test_release_preserves_reservations_from_other_instances(tmp_path):
     assert second.isoformat() in Schedule(a.path).used
 
 
+def test_release_prunes_past_slots_against_the_given_time_not_the_wall_clock(tmp_path):
+    plan = Schedule(tmp_path / "s.json")
+    now = datetime(2026, 9, 13, 9, 0, tzinfo=plan.zone)
+    kept, freed = plan.reserve(now), plan.reserve(now)
+    plan.release(freed, now)
+    assert Schedule(plan.path).used == {kept.isoformat()}
+
+
 def test_schedule_fills_whole_day_then_next_day(tmp_path):
     plan = Schedule(tmp_path / "s.json")
     now = datetime(2026, 9, 13, 7, 0, tzinfo=plan.zone)
