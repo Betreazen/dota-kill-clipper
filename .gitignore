@@ -11,3 +11,14 @@ graphify-out/
 # Google OAuth secrets and tokens never belong in the repo
 client_secret*.json
 *token*.json
+# private working notes: local paths, environment, session logs (kept on disk only)
+.claude/
+CLAUDE.md
+docs/MEMORY.md
+docs/HANDOFF.md
+docs/PLAN.md
+docs/SCENARIOS.md
+docs/START_PROMPT.md
+docs/TASK-HIGHLIGHTS-TO-E.md
+docs/YOUTUBE_AUDIT.md
+docs/PROJECT.md

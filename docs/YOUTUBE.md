@@ -9,7 +9,7 @@ ID канала из токена с ID этого handle; токен друго
 
 ## 1. Проект Google (один раз)
 1. [console.cloud.google.com](https://console.cloud.google.com) → создать проект → APIs & Services → Library → включить **YouTube Data API v3**.
-2. Google Auth Platform → Branding и Audience: заполнить поля по листу [YOUTUBE_AUDIT.md](YOUTUBE_AUDIT.md), затем **Publish app** (статус In production).
+2. Google Auth Platform → Branding и Audience: заполнить поля (название, почта поддержки, ссылки на сайт, политику и условия), затем **Publish app** (статус In production).
    В статусе Testing Google выдаёт refresh token только на 7 дней. После публикации один раз заново нажать «Log in to YouTube».
    Экран «Google hasn't verified this app» для личного использования пропускается: Advanced → Go to Dota Kill Clipper.
    Сайт и политика конфиденциальности проекта: https://betreazen.github.io/dota-kill-clipper/ (GitHub Pages из папки `docs`).
@@ -21,7 +21,7 @@ ID канала из токена с ID этого handle; токен друго
 ## 2. Аудит
 По документации Google видео из проекта без аудита могут оставаться приватными. Проверено 2026-09-13: на этом проекте
 запланированное видео стало публичным в назначенное время ещё до одобрения аудита. Аудит подан на всякий случай. Нужно подать форму *YouTube API Services — Audit and Quota Extension Form*
-(support.google.com/youtube/contact/yt_api_form). Готовые ответы и файлы для загрузки — в [YOUTUBE_AUDIT.md](YOUTUBE_AUDIT.md).
+(support.google.com/youtube/contact/yt_api_form).
 Ответ Google придёт на контактную почту из формы.
 
 ## 3. Вход

@@ -52,7 +52,7 @@ E:\Highlights\2026-09-09 21-35 pudge (match 8954164528)\
 
 ## Shorts и YouTube
 Для игр на Techies каждый готовый клип дополнительно монтируется в вертикальный Short 1080×1920 и публикуется на канале
-«Betreazen highlights Dota 2» по расписанию. Настройка Google и входа — в [docs/YOUTUBE.md](docs/YOUTUBE.md), правила — в `docs/PROJECT.md` §10.
+«Betreazen highlights Dota 2» по расписанию. Настройка Google и входа — в [docs/YOUTUBE.md](docs/YOUTUBE.md).
 
 - Вертикальная версия кладётся в подпапку `shorts` папки матча, горизонтальный клип остаётся.
 - CTA сверху и снизу: файлы 1080×420 с прозрачностью (ProRes 4444 `.mov`, WebM VP9 с альфой, GIF, PNG).
@@ -85,10 +85,9 @@ python -m pytest -q          # Python 3.14 (код совместим с 3.12)
 %LOCALAPPDATA%\Python\pythoncore-3.12-64\python.exe tools\healthcheck.py   # проверка окружения, только чтение
 python -m killclipper.youtube playlists "<client_secret.json>"                # плейлисты и их SEO-описания
 ```
-Точка входа для продолжения разработки: [docs/HANDOFF.md](docs/HANDOFF.md).
 Структура: `obs_dota_kill_clipper.py` (обвязка OBS) · `killclipper/` (`gsi`, `series`, `naming`, `cut`,
-`dota_paths`, `clipper`, `render`, `publishing`, `youtube`, `pipeline`, `seo_dictionary.json`) · `tools/` · `tests/` · `docs/` (спека, план, память задачи, сценарии).
-Вне стандартной библиотеки — только библиотеки Google для YouTube (`requirements-youtube.txt`). Правила для Claude Code — в [CLAUDE.md](CLAUDE.md).
+`dota_paths`, `clipper`, `render`, `publishing`, `youtube`, `pipeline`, `seo_dictionary.json`) · `tools/` · `tests/` · `docs/` (настройка YouTube, надёжность очереди, сайт).
+Вне стандартной библиотеки — только библиотеки Google для YouTube (`requirements-youtube.txt`).
 
 ## Вне рамок
 Клипы смертей, командные убийства, оверлеи поверх игры, публикация куда-либо кроме YouTube, Linux/macOS.
